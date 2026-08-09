@@ -19,6 +19,7 @@ from pathlib import Path
 import polars as pl
 
 from quant.candles.aggregation import aggregate_candles
+from quant.candles.verify import verify_aggregation
 from quant.indicators.angle import add_ema_angle
 from quant.indicators.ema import add_ema
 
@@ -122,4 +123,25 @@ def process_month(
         metadata_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         results[f"{tf}m"] = {"path": str(out_path), "bars": frame.height}
 
-    return {**results, "validation": report.overall_status}
+    # 3. Verify every derived timeframe against the raw 1m source
+    verification: dict[str, dict[str, object]] = {}
+    for tf in timeframes:
+        if tf == 1:
+            continue
+        out_dir = processed_month / f"{tf}m"
+        vreport = verify_aggregation(
+            raw,
+            pl.read_parquet(out_dir / "candles.parquet"),
+            tf,
+            name=f"NIFTY_FUT_{year:04d}-{month:02d}_{tf}m",
+        )
+        (out_dir / "verification_report.json").write_text(
+            json.dumps(vreport, indent=2), encoding="utf-8"
+        )
+        verification[f"{tf}m"] = vreport["overall"]
+
+    return {
+        **results,
+        "validation": report.overall_status,
+        "verification": verification,
+    }

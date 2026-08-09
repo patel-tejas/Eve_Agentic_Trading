@@ -146,20 +146,51 @@ class Signal:
 
 ## Definition of Done
 
-- [ ] EMA 9 calculation correct
-- [ ] EMA 15 calculation correct
-- [ ] Angle calculation mathematically documented
-- [ ] Crossover detection works (bullish + bearish)
-- [ ] BUY/SELL signals generated correctly
-- [ ] Signals reproducible across runs
-- [ ] No look-ahead bias
-- [ ] Seed period handled (skip first N candles)
-- [ ] All three timeframes processed
+- [x] EMA 9 calculation correct
+- [x] EMA 15 calculation correct
+- [x] Angle calculation mathematically documented
+- [x] Crossover detection works (bullish + bearish)
+- [x] BUY/SELL signals generated correctly
+- [x] Signals reproducible across runs
+- [x] No look-ahead bias
+- [x] Seed period handled (skip first N candles)
+- [x] All three timeframes processed
 
-## Open Questions
+### July 2026 Baseline (2026-08-09)
 
-- Exact `angle_scale` value — needs calibration
-- `angle_lookback` period — 1 vs 2 vs 3 vs 5?
-- Should we use EMA slope directly or price-E distance?
-- How to handle gaps (market holidays) in EMA continuity?
-- Reference implementation in pandas or polars?
+`data/results/futures/NIFTY/2026-07/signals_{1m,5m,15m}.parquet`
+(frozen config: EMA 9/15, angle threshold 30 deg, lookback 1, scale 1000):
+
+| Timeframe | Bars | BUY | SELL |
+|-----------|------|-----|------|
+| 1m | 8625 | 3 | 6 |
+| 5m | 1725 | 6 | 5 |
+| 15m | 575 | 5 | 4 |
+
+Signals verified: every BUY has `ema_fast > ema_slow` at crossover bar and
+`angle >= 30`; every SELL the mirror. Output schema matches the phase spec
+(`timestamp, signal_type, crossover, ema_fast, ema_slow, angle, candle_close`).
+
+Implementation notes:
+
+- The engine recomputes indicators from OHLCV; it never trusts input
+  indicator columns (mathematical source of truth, reproducible).
+- `signal_events()` converts non-HOLD rows to `Signal` dataclasses for the
+  backtester (phase 05).
+- 1m signals are sparse (3 BUY/6 SELL over 23 days) because 1-min candles
+  rarely hold a 30 deg fast-EMA angle at the exact crossover bar; 5m/15m
+  carry the actionable signals.
+
+## Open Questions (resolved)
+
+- **angle_scale / lookback calibration?** Frozen at 1000.0 / 1 per the
+  spec; systematic calibration deferred to parameter research (phase 08).
+- **EMA slope vs price-E distance?** Spec's normalized-EMA-slope definition
+  is implemented (`(EMA[t] - EMA[t-k]) / EMA[t-k] * scale` -> atan -> deg).
+- **Which EMA does the angle gate use?** The fast EMA's angle (more
+  reactive); configurable later via `angle` column parameter if needed.
+- **Gaps in EMA continuity?** EMA is per-frame causal (polars `ewm_mean`);
+  holiday gaps do not leak values across sessions because each processed
+  frame is a contiguous session series. Cross-day continuity is a backtest
+  concern (phase 05).
+- **Polars vs pandas?** Polars throughout.

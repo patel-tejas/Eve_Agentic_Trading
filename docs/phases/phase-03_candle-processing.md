@@ -122,16 +122,44 @@ def aggregate_candles(df: pl.DataFrame, factor: int) -> pl.DataFrame:
 
 ## Definition of Done
 
-- [ ] 5m candles correctly aggregated from 1m
-- [ ] 15m candles correctly aggregated from 1m
-- [ ] Candle count ratio approximately correct
-- [ ] OHLC integrity maintained
-- [ ] Volume sums match source
-- [ ] Boundary alignment verified
-- [ ] Parquet files saved
+- [x] 5m candles correctly aggregated from 1m
+- [x] 15m candles correctly aggregated from 1m
+- [x] Candle count ratio approximately correct
+- [x] OHLC integrity maintained
+- [x] Volume sums match source
+- [x] Boundary alignment verified
+- [x] Parquet files saved
 
-## Open Questions
+### July 2026 Verification (2026-08-09)
 
-- How to handle partial candles at market open/close?
-- Should derived timeframes include metadata (source timeframe, factor)?
-- Cross-validation against Dhan's native 5m/15m data?
+NIFTY futures, 8625 validated 1m bars -> `data/processed/futures/NIFTY/2026-07/`:
+
+| Timeframe | Bars | Checks | Volume 1m vs derived |
+|-----------|------|--------|----------------------|
+| 5m | 1725 | all pass | 25,324,715 == 25,324,715 |
+| 15m | 575 | all pass | 25,324,715 == 25,324,715 |
+
+Every bucket is full-sized (75/day for 5m, 25/day for 15m, no partial trailing
+buckets), all bucket opens sit on wall-clock grids (09:15, 09:20, ... and
+09:15, 09:30, ...), first/last candles align to the session edges, and OHLC of
+derived candles holds. Reports live next to each dataset:
+`{1m,5m,15m}/verification_report.json` plus `dataset_metadata.json`.
+
+Implementation notes:
+
+- Aggregation uses polars `group_by_dynamic` with `closed="left"`, `label="left"`.
+- Verified a polars gotcha: `dt.hour()/dt.minute()` are Int8 and overflow during
+  `hour * 60`; any minute-of-day arithmetic must cast to Int64 first.
+
+## Open Questions (resolved)
+
+- **Partial candles at open/close?** NSE F&O sessions are complete
+  (09:15-15:29 = 375 1m bars), so every bucket is full. If a partial trailing
+  bucket ever appears (truncated source), it is kept, not dropped, and
+  `bucket_size` warns.
+- **Derived timeframe metadata?** Yes: `dataset_metadata.json` per timeframe
+  (source, timeframe_minutes, bars, indicator params) + `verification_report.json`.
+- **Cross-validation against Dhan native 5m/15m?** Deferred: counts, volumes,
+  and boundaries are verified against the canonical 1m source, which is the
+  stronger invariant; Dhan-side cross-check can be added when a second data
+  source is pulled.
