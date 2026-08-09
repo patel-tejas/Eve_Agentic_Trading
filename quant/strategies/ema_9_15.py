@@ -35,7 +35,9 @@ class StrategyConfig(BaseModel):
     angle_threshold: float = 30.0  # degrees
     angle_lookback: int = 1
     angle_scale: float = 1000.0  # normalization factor
-    signal_mode: Literal["crossover_and_angle"] = "crossover_and_angle"
+    signal_mode: Literal["crossover", "crossover_and_angle", "crossover_angle_and_trend"] = (
+        "crossover_and_angle"
+    )
 
     @model_validator(mode="after")
     def _validate_periods(self) -> "StrategyConfig":
@@ -116,10 +118,22 @@ def generate_signals(
     crossover_down = (f < s) & (prev_f >= prev_s)
 
     angle = pl.col(angle_col)
+    close_gt_slow = pl.col("close") > pl.col(slow)
+    if cfg.signal_mode == "crossover":
+        base_buy, base_sell = crossover_up, crossover_down
+    else:
+        gate_buy = angle >= cfg.angle_threshold
+        gate_sell = angle <= -cfg.angle_threshold
+        if cfg.signal_mode == "crossover_angle_and_trend":
+            gate_buy = gate_buy & close_gt_slow
+            gate_sell = gate_sell & (~close_gt_slow)
+        signal_buy = crossover_up & gate_buy
+        signal_sell = crossover_down & gate_sell
+        base_buy, base_sell = signal_buy, signal_sell
     signal_type = (
-        pl.when(crossover_up & (angle >= cfg.angle_threshold))
+        pl.when(base_buy)
         .then(pl.lit("BUY"))
-        .when(crossover_down & (angle <= -cfg.angle_threshold))
+        .when(base_sell)
         .then(pl.lit("SELL"))
         .otherwise(pl.lit("HOLD"))
     )

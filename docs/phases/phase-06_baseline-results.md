@@ -132,17 +132,51 @@ Each experiment gets:
 
 ## Definition of Done
 
-- [ ] All three timeframes backtested
-- [ ] All three strategy variants (A, B, C) tested
-- [ ] Comparison table complete
-- [ ] Report generated with all sections
-- [ ] Experiment ID and config hash assigned
-- [ ] Results reproducible
-- [ ] No fabricated metrics
+- [x] All three timeframes backtested
+- [x] All three strategy variants (A, B, C) tested
+- [x] Comparison table complete
+- [x] Report generated with all sections
+- [x] Experiment ID and config hash assigned
+- [x] Results reproducible
+- [x] No fabricated metrics
 
-## Open Questions
+### July 2026 Baseline (2026-08-09)
 
-- Which strategy variant is the "true baseline" (A, B, or C)?
-- Should we test across multiple months before drawing conclusions?
-- How to handle statistical significance with small sample sizes?
-- What constitutes "meaningful edge" — Sharpe > 1? Positive net P&L?
+`scripts/run_baseline.py --year 2026 --month 7` -> 9 experiments
+(3 variants x 3 timeframes), EXP-2026-0001..0009.
+Artifacts: `baseline_comparison.json`, `baseline_report.md`,
+`baseline/trades_<EXP-ID>.parquet` under `data/results/futures/NIFTY/2026-07/`.
+
+Net P&L matrix (slippage normal = 1 tick, costs india_futures_v1):
+
+| Variant | 1m | 5m | 15m |
+|---------|----|----|-----|
+| A crossover only | -103,025 (268 tr) | -34,023 (44) | -15,794 (12) |
+| B + angle 30 | -18,672 (2) | -20,225 (4) | **+5,737** (4) |
+| C + trend filter | -18,672 (2) | -20,225 (4) | **+5,737** (4) |
+
+Observations:
+
+- Variant A over-trades on 1m (268 trades): every raw crossover is traded
+  into an unprofitable noise regime; frictions compound. The angle filter
+  prevents ~99% of 1m trades.
+- **B == C in this sample**: the price-vs-slow-EMA trend condition never
+  discriminates — every crossover that already passed the 30 deg angle gate
+  had price on the correct side of the slow EMA. Trend filter is redundant
+  for July (worth re-testing on more months).
+- Only B/C on 15m end net positive (PF 1.35, Sharpe 0.95, maxDD 2.6%).
+- Statistical caveats: 4 trades per positive cell — no significance. The
+  comparison is a pipeline/behavior benchmark, not proof of edge.
+
+## Open Questions (resolved)
+
+- **Which variant is "the true baseline"?** B (EMA crossover + 30 deg angle)
+  is the documented strategy minimum; A exists to quantify the filter's
+  value, C to test the trend condition.
+- **Multiple months?** Yes — the framework now accepts any processed month;
+  multi-month evaluation lands with the research pipeline (phase 08).
+- **Statistical significance?** Not claimable from 2-12 trades/month; treat
+  all July numbers as descriptive. Optional resampling-based intervals in
+  phase 08.
+- **"Meaningful edge"?** Decision rule proposed: positive net P&L AND
+  PF > 1.25 AND maxDD < 10% on a month as a first sieve.
