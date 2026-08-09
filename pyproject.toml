@@ -11,6 +11,7 @@ dependencies = [
     "pydantic>=2.5",
     "pydantic-settings>=2.3",
     "httpx>=0.27",
+    "fastmcp>=2.0",
 ]
 
 [build-system]
@@ -19,13 +20,16 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["quant*"]
+include = ["quant*", "mcp*"]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
 ]
+
+[project.scripts]
+quant-mcp = "mcp.quant_server.server:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

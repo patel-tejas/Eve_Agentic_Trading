@@ -133,18 +133,48 @@ Eve:
 
 ## Definition of Done
 
-- [ ] Eve agent configured
-- [ ] All 5 core MCP tools implemented
-- [ ] Skills created for domain knowledge
-- [ ] Subagent architecture implemented
-- [ ] "Backtest NIFTY strategy for July" works end-to-end
-- [ ] Agent does NOT perform financial calculations itself
-- [ ] Tool results are deterministic and reproducible
+- [x] Eve agent configured
+- [x] All 5 core MCP tools implemented (10 tools in total)
+- [x] Skills created for domain knowledge
+- [x] Subagent architecture implemented
+- [x] "Backtest NIFTY strategy for July" works end-to-end
+- [x] Agent does NOT perform financial calculations itself
+- [x] Tool results are deterministic and reproducible
 
-## Open Questions
+## Implementation Notes (2026-08-09)
 
-- Does Eve require specific project structure?
-- How to handle tool failures gracefully?
-- Agent evaluation: how to test for hallucinated data?
-- How to handle long-running backtests (timeout)?
-- Should agent have access to raw Parquet files or only through tools?
+Runtime: OpenCode-native. Agent layer in `agent/`, MCP server in
+`mcp/quant_server/`, skills in `.opencode/skills/`, subagents in
+`.opencode/agent/`. Registered as the `quant` MCP server in `opencode.json`
+(command: `uv run python -m mcp.quant_server.server`).
+
+Tools built: `list_research_months`, `get_historical_candles`,
+`download_month_data`, `validate_dataset`, `process_month_data`,
+`generate_signal`, `run_backtest_signals`, `compare_timeframes`,
+`parameter_search`, `walk_forward_test`. Tools are plain sync functions
+(unit-tested, network-free) decorated onto the FastMCP app; `parameter_search`
+and `walk_forward_test` default to the phase-08 grids and training-window-only
+calibration.
+
+Verification:
+- 14 new unit tests (`tests/test_phase07_mcp.py`) — tool schema, determinism,
+  error hints (missing month -> what to run next). 91 tests total, lint clean.
+- `agent/evals/golden_workflow.py` reproduces the documented July baseline
+  numbers exactly (B: 1m 2 trades -18,672 / 5m 4 trades -20,225 /
+  15m 4 trades +5,737; 9 experiments; 320-combo grid best 5m = 7/21): the
+  agent's answers are pinned to the engine, not to the model.
+
+## Open Questions (resolved)
+
+- ~~Does Eve require specific project structure?~~ -> OpenCode-native
+  (subagents/skills/MCP) inside the repo.
+- ~~How to handle tool failures gracefully?~~ -> structured ValueError with
+  hints (available months, next tool to run).
+- ~~Agent evaluation: how to test hallucinated data?~~ -> golden workflow
+  pytest-style regression pins every number to the engine; agent never
+  computes.
+- ~~How to handle long-running backtests (timeout)?~~ -> 1m grid is slowest;
+  instructions say to narrow grids or prefer 5m/15m first.
+- ~~Should agent have access to raw Parquet files or only through tools?~~ ->
+  Tools only; subagents get `edit: deny` + no webfetch/websearch and only
+  read data through the MCP tools.
