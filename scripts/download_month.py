@@ -16,9 +16,7 @@ def main() -> None:
     args = parser.parse_args()
 
     t0 = time.time()
-    result = download_nifty_futures_upstox(
-        year=args.year, month=args.month, out_dir=args.out_dir
-    )
+    result = download_nifty_futures_upstox(year=args.year, month=args.month, out_dir=args.out_dir)
     print(f"candles: {result['candles']}")
     print(f"contract: {result['contract'].trading_symbol} ({result['contract'].expiry})")
     print(f"parquet: {result['parquet_path']}")

@@ -124,12 +124,21 @@ class ValidationReport:
 
 ## Definition of Done
 
-- [ ] All 6 validation checks implemented
-- [ ] Validation report generated for July 2026 dataset
-- [ ] No critical errors in dataset
-- [ ] Warnings documented and explained
-- [ ] Validation is reproducible (same input = same report)
-- [ ] Validation metadata tied to dataset version
+- [x] All 6 validation checks implemented
+- [x] Validation report generated for July 2026 dataset
+- [x] No critical errors in dataset
+- [x] Warnings documented and explained
+- [x] Validation is reproducible (same input = same report)
+- [x] Validation metadata tied to dataset version
+
+### July 2026 Baseline (2026-08-09)
+
+- Status: `pass_with_warnings`, 0 errors
+- `volume_sanity` warn: 388 zero-volume 1m bars (4.5%) — scattered single-minute
+  gaps with no trades, not a contiguous feed outage; price/OHLC unaffected.
+  Zero-volume bars are retained for aggregation. No auto-fix needed.
+- All other checks pass (`timestamp_monotonic`, `no_duplicates`, `market_hours`,
+  `daily_bar_counts`, `ohlc_integrity`, `open_interest_sanity`, `continuity`).
 
 ## Open Questions
 
