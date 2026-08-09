@@ -165,17 +165,55 @@ class BacktestConfig:
 
 ## Definition of Done
 
-- [ ] No look-ahead bias (entries at next candle open)
-- [ ] Transaction costs applied correctly
-- [ ] Slippage configurable
-- [ ] All metrics implemented
-- [ ] Results reproducible
-- [ ] Trade log complete
-- [ ] Equity curve generated
+- [x] No look-ahead bias (entries at next candle open)
+- [x] Transaction costs applied correctly
+- [x] Slippage configurable
+- [x] All metrics implemented
+- [x] Results reproducible
+- [x] Trade log complete
+- [x] Equity curve generated
 
-## Open Questions
+### July 2026 Baseline (2026-08-09)
 
-- How to handle partial fills (not applicable for backtest)?
-- Should we support intraday position squaring?
-- Cost model: flat brokerage or percentage-based?
-- How to handle market gaps (overnight, holidays)?
+`data/results/futures/NIFTY/2026-07/{trades,metrics,equity}_{1m,5m,15m}.*`
+Baseline config: 1 lot x 50, capital 10L, ideal slippage (0 ticks),
+brokerage 20/order, STT 0.0125% (sell), exchange 0.00345%, SEBI 0.0001%,
+stamp 0.003% (buy), GST 18%.
+
+| Timeframe | Trades | Net P&L | Win rate | Profit factor | Max DD (equity) |
+|-----------|--------|---------|----------|---------------|-----------------|
+| 1m | 2 | -18,662 | 0% | 0.00 | 4.0% |
+| 5m | 4 | -20,205 | 25% | 0.10 | 4.0% |
+| 15m | 4 | +5,757 | 25% | 1.35 | 2.6% |
+
+Observations:
+
+- Only 15m is net positive in July; 1m/5m lose after costs. Baseline config
+  is deliberately untuned (calibration -> phase 08 research).
+- Round-trip costs ~ 335 INR/52 lot-turnover (~0.05% of turnover): brokerage
+  40 + STT + exchange + SEBI + stamp + GST.
+- Trade 4 (15m LONG, 24 Jul) carried +27,250 gross and was force-closed at
+  the end of the sample (closed_at_end=1).
+- Equity curve is mark-to-market at each bar close; final equity =
+  initial_capital + sum(net P&L).
+
+Implementation notes:
+
+- Engine is an explicit bar loop over (candle x signal) inner joins;
+  signals are consumed at close(t) and filled at open(t+1) with slippage.
+- Position state machine: FLAT -> BUY: LONG, FLAT -> SELL: SHORT,
+  LONG -> SELL: FLAT, SHORT -> BUY: FLAT; same-direction signals ignored.
+- Trades schema matches the phase spec + `closed_at_end` marker.
+
+## Open Questions (resolved)
+
+- **Partial fills?** Not modeled: backtest assumes every order fills at the
+  execution price (position_size is 1 lot for now).
+- **Intraday squaring?** Not implemented; positions may be carried
+  overnight/holdings beyond the session. Add an intraday-exit config in a
+  later phase if the strategy requires it.
+- **Flat or % brokerage?** Flat per order (20 INR) with a `brokerage_flat`
+  knob; percentage mode can be added.
+- **Market gaps (overnight/holidays)?** Execution uses the first available
+  next bar's open; a missing bar means the order fills at the next traded
+  bar's open. Holding-period counts bars of the working timeline.
