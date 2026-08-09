@@ -10,7 +10,7 @@ Each document covers: what we're building, key concepts, tech stack references, 
 
 | Phase | Name | Status |
 |-------|------|--------|
-| 00 | [Project Foundation](phase-00_project-foundation.md) | Research |
+| 00 | [Project Foundation](phase-00_project-foundation.md) | Implemented |
 | 01 | [DhanHQ Data Acquisition](phase-01_dhan-data-acquisition.md) | Research |
 | 02 | [Data Validation](phase-02_data-validation.md) | Research |
 | 03 | [Candle Processing](phase-03_candle-processing.md) | Research |
