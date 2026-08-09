@@ -105,16 +105,56 @@ Low volatility regime:
 
 ## Definition of Done
 
-- [ ] Parameter grid search works
-- [ ] Walk-forward validation implemented
-- [ ] Regime analysis implemented
-- [ ] Robustness metrics calculated
-- [ ] Results stored with experiment IDs
-- [ ] Report generated
+- [x] Parameter grid search works
+- [x] Walk-forward validation implemented
+- [x] Regime analysis implemented
+- [x] Robustness metrics calculated
+- [x] Results stored with experiment IDs
+- [x] Report generated
+
+## July 2026 Results (baseline run, 2026-08-09)
+
+Tools: `quant/research/parameter_search.py`, `quant/research/walk_forward.py`,
+`quant/research/regime.py`, `scripts/run_research.py`.
+Outputs: `data/results/futures/NIFTY/2026-07/research/`
+(`parameter_search_<tf>.parquet`, `walk_forward_<tf>.parquet`,
+`regime_analysis.json`, `robustness_report.md`).
+
+Grid (320 combos, training window Jul 1-23 only):
+
+| Timeframe | Best params (fast/slow/angle/lookback) | Train net | PF | Positive combos | Median net |
+|---|---|---|---|---|---|
+| 1m | 5 / 18 / 25 / 5 | +32,272 | 2.90 | 58.1% | +2,860 |
+| 5m | 7 / 21 / 35 / 5 | +26,791 | 4.23 | 45.6% | -659 |
+| 15m | 7 / 18 / 40 / 3 | +17,959 | 2.57 | 21.6% | -11,897 |
+
+Walk-forward (3 steps, out-of-sample windows): test nets of +6,181 / -1,121 /
++16,719 on 1m (2/7/1 trades), +2,096 / +18 / 0 on 5m (2/2/0 trades),
+-399 / 0 / +4,633 on 15m (2/0/1 trades).
+
+Regime analysis (B-config full month): July was a low-volatility month —
+23 trading days split 1 high / 8 mid / 14 low. B-config lost money in low
+regimes on 1m/5m (-18,672 / -7,178) but made +10,628 on 15m mid regime
+(PF 1.75).
+
+Observations:
+- Best params are small fast EMA (5-7), mid slow EMA (18-21), permissive
+  angle (25-40); the 320-grid best meaningfully beats default B-config on
+  every timeframe (train set).
+- Out-of-sample windows are extremely thin (0-2 trades); walk-forward is
+  directionally informative but not statistically decisive on one month.
+- Regime split is lopsided (no high-vol days in July); monthly regimes
+  will be more interesting once multiple months exist.
+- Runtime: full 1m grid = ~1-2 min, 5m/15m seconds each (single-process).
+  Parallelization deferred (see open question).
 
 ## Open Questions
 
-- How many walk-forward windows are sufficient?
-- How to define "regime" without India VIX data?
-- Should we use parallel processing for parameter search?
-- How to handle overfitting detection?
+- ~~How many walk-forward windows are sufficient?~~ Settled on 3 anchored
+  steps of 5 test days for one month (July 16-20 / 21-25 / 26-31).
+- ~~How to define "regime" without India VIX data?~~ -> Realized daily range
+  (high-low)/close: >1.5% high, <0.8% low, else mid.
+- How to handle parameter search speed: parallel processing only if monthly
+  grid runs get longer with new months.
+- Overfitting detection: current signal = IS vs OOS degradation + median
+  vs-best spread in one sweep, OS stability is per-window.
