@@ -1,46 +1,34 @@
-# Futures Backtesting (Phase 05)
+---
+description: Use when explaining backtest execution, slippage, costs, or interpreting P&L metrics and the decision rule.
+---
+
+# Futures Backtesting
 
 ## Execution model
 
-- Signals are decided at their bar's **close**; orders fill at the **next
-  bar's open** plus adverse slippage. There is no intra-bar fill, ever.
-- FLAT→BUY opens LONG, FLAT→SELL opens SHORT. Same-direction signals while
-  open are ignored.
-- A position still open at series end is closed at the last close and
-  flagged `closed_at_end=1` (its P&L is included).
+Signal at bar close → fill at **next bar's open** + slippage. No intra-bar fill.
+FLAT→BUY opens LONG, FLAT→SELL opens SHORT. Same-direction signals while open are ignored.
+A position open at series end is closed at last close, flagged `closed_at_end=1`.
 
-## Slippage
+## Slippage modes
 
-`SlippageConfig.mode`: `ideal` (0 ticks), `normal` (1 tick adverse —
-the default for research), `stress` (≥3 ticks), `ticks` (explicit
-entry/exit ticks). Tick = 0.05 (NIFTY futures).
+`ideal` (0 ticks) · `normal` (1 tick adverse, default for research) · `stress` (3+ ticks) · `ticks` (explicit). Tick = ₹0.05.
 
-## Costs (per round trip, NIFTY futures, 1 lot = 50)
+## Costs per round trip (NIFTY futures, 1 lot = 50 units)
 
-- Brokerage: flat ₹20 per order leg
-- STT: 0.0125% on the sell leg only
-- Exchange charge: 0.00345% both legs
-- SEBI: 0.0001%, Stamp duty: 0.003% (buy), GST 18% on (brokerage + exchange)
+Brokerage ₹20/leg + STT 0.0125% sell + exchange 0.00345% + SEBI 0.0001% + stamp 0.003% + GST 18%.
+Rule of thumb: ~₹330+ per round trip.
 
-Rule of thumb: ~₹330+ per round trip, so ₹10k+ net P&L with < 10 trades is
-not noise.
-
-## Metrics glossary
+## Key metrics
 
 | Metric | Meaning |
 |---|---|
-| `net_pnl` | gross − costs; the number to quote |
-| `profit_factor` | gross P&L of winners ÷ \|gross P&L\| of losers |
-| `max_drawdown_pct` | % peak-to-trough on the equity curve |
-| `sharpe`/`sortino` | annualized (252) from daily equity returns |
-| `calmar` | annualized return ÷ max drawdown |
-| `trading_days` | unique days in the equity curve |
+| `net_pnl` | gross − costs; the primary number to report |
+| `profit_factor` | gross winners ÷ abs(gross losers) |
+| `max_drawdown_pct` | % peak-to-trough on equity curve |
+| `sharpe` / `sortino` | annualized (252 days) from daily equity returns |
 
-## Interpretation rules
+## Decision rule
 
-- Costs and slippage are already inside every metric — never add them on.
-- Decision rule used in this project: net > 0 AND PF > 1.25 AND max
-  drawdown < 10% (per timeframe).
-- Fewer than ~20 trades per month means "directional, not statistically
-  decisive". Say so.
-- 1m is the most active timeframe and the most cost-sensitive.
+net > 0 AND profit_factor > 1.25 AND max drawdown < 10% per timeframe.
+Fewer than 20 trades per month = "directional, not statistically decisive" — always say so.

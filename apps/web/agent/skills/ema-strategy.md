@@ -1,22 +1,20 @@
-# EMA 9/15 + Angle Strategy (Phase 04)
+---
+description: Use when running backtests, understanding the EMA crossover strategy, or interpreting signals and variants A/B/C.
+---
 
-## Strategy rules
+# EMA 9/15 + Angle Strategy
 
-- **BUY**: bullish crossover (fast EMA crosses above slow EMA) AND
-  fast-EMA angle >= threshold (+30° default)
-- **SELL**: bearish crossover (fast EMA crosses below slow EMA) AND
-  fast-EMA angle <= threshold (-30° default)
-- Anything else: **HOLD**
+## Signal rules
 
-## Signal engine contract
+- **BUY**: bullish crossover (fast EMA crosses above slow EMA) AND fast-EMA angle >= threshold (+30° default)
+- **SELL**: bearish crossover AND fast-EMA angle <= threshold (−30° default)
+- Otherwise: **HOLD**
 
-- Indicators are recomputed by the engine from OHLCV — never trust
-  indicator columns in inputs.
-- Deterministic: same candles + same config → identical output.
-- No look-ahead: at bar `t` only bars `<= t` are used. Crossover uses
-  `t-1`; angle uses close of `t`.
-- Seed window: the first `slow_ema - 1` bars carry no slow EMA and are
-  always HOLD.
+## Engine contract
+
+- Deterministic: same candles + same config → identical output every time.
+- No look-ahead: crossover uses bar t-1, angle uses close of t.
+- First `slow_ema - 1` bars are always HOLD (seed window, no slow EMA yet).
 
 ## Parameters (StrategyConfig)
 
@@ -24,17 +22,12 @@
 |---|---|---|
 | `fast_ema` | 9 | must be < `slow_ema` |
 | `slow_ema` | 15 | |
-| `angle_threshold` | 30.0 | degrees; applies to both sides |
-| `angle_lookback` | 1 | bars used for slope |
-| `signal_mode` | `crossover_and_angle` | `crossover` (angle gate off) / `crossover_and_angle` (B) / `crossover_angle_and_trend` (C: also requires close above slow EMA for BUY) |
+| `angle_threshold` | 30.0 | degrees, applies to both sides |
+| `angle_lookback` | 1 | bars used for slope calculation |
+| `signal_mode` | `crossover_and_angle` | see variants below |
 
 ## Variants
 
-- **A** = `crossover` — most signals, worst cost drag.
-- **B** = `crossover_and_angle` — the default strategy.
-- **C** = `crossover_angle_and_trend` — trend filter on top of B.
-
-## Signal output columns
-
-`timestamp, signal_type (BUY/SELL/HOLD), crossover, ema_fast, ema_slow,
-angle, candle_close` — one row per bar, HOLD rows included.
+- **A** = `crossover` — crossover only, no angle gate (most signals)
+- **B** = `crossover_and_angle` — default research strategy
+- **C** = `crossover_angle_and_trend` — also requires close above slow EMA for BUY

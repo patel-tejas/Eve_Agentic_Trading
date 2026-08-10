@@ -413,19 +413,30 @@ type SavedChat = {
 };
 
 export default function EveChat() {
-  const [saved] = useState<SavedChat>(() => {
-    if (typeof window === "undefined") return {};
+  // Always start with empty state on both server and client to prevent
+  // SSR/hydration mismatch. We restore localStorage in useEffect (client-only,
+  // after first paint) so both renders produce identical initial HTML.
+  const [initialEvents, setInitialEvents] = useState<never[]>([]);
+  const [initialSession, setInitialSession] = useState<never | undefined>(undefined);
+  const [hydrated, setHydrated] = useState(false);
+
+  useEffect(() => {
     try {
       const raw = localStorage.getItem("eve-chat");
-      return raw ? (JSON.parse(raw) as SavedChat) : {};
+      if (raw) {
+        const saved = JSON.parse(raw) as SavedChat;
+        if (saved.events) setInitialEvents(saved.events as never[]);
+        if (saved.session) setInitialSession(saved.session as never);
+      }
     } catch {
-      return {};
+      /* localStorage unavailable — ignore */
     }
-  });
+    setHydrated(true);
+  }, []);
 
   const agent = useEveAgent({
-    initialEvents: (saved.events as never[]) ?? [],
-    initialSession: saved.session as never,
+    initialEvents,
+    initialSession,
     onFinish(snapshot) {
       try {
         localStorage.setItem(
@@ -444,6 +455,16 @@ export default function EveChat() {
   useEffect(() => {
     if (agent.error) console.error("eve agent error:", agent.error);
   }, [agent.error]);
+
+  // Don't render anything until client-side hydration is complete.
+  // This prevents a server/client mismatch when localStorage has saved messages.
+  if (!hydrated) {
+    return (
+      <main className="mx-auto flex h-screen max-w-4xl flex-col items-center justify-center bg-zinc-950 text-zinc-600">
+        <div className="text-sm">Loading Eve…</div>
+      </main>
+    );
+  }
 
   return (
     <main className="mx-auto flex h-screen max-w-4xl flex-col bg-zinc-950 px-4 text-zinc-200">
