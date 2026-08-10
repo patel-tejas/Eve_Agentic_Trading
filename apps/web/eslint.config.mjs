@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Eve dev runtime (generated, gitignored):
+    ".eve/**",
   ]),
 ]);
 
