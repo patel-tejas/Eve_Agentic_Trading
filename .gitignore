@@ -34,3 +34,5 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+# Vault + alert state (runtime artifacts)
+data/vault/

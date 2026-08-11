@@ -23,21 +23,24 @@ from quant.backtest.execution import ExecutionConfig
 from quant.data.download import download_nifty_futures_upstox
 from quant.data.validation import validate_dataset as validate_dataset_engine
 from quant.processing.pipeline import process_month
-from quant.research.baseline import comparison_table, run_baseline
+from quant.research.baseline import comparison_table, config_hash, run_baseline
 from quant.research.parameter_search import parameter_grid_search, split_schedule
 from quant.research.walk_forward import walk_forward
 from quant.strategies.ema_9_15 import StrategyConfig, generate_signals
+from quant.vault import query_runs, record_run
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_RAW_ROOT = PROJECT_ROOT / "data" / "raw" / "futures" / "NIFTY"
 DEFAULT_PROCESSED_ROOT = PROJECT_ROOT / "data" / "processed" / "futures" / "NIFTY"
 DEFAULT_RESULTS_ROOT = PROJECT_ROOT / "data" / "results" / "futures" / "NIFTY"
+DEFAULT_VAULT = PROJECT_ROOT / "data" / "vault" / "experiments.db"
 
 TIMEFRAME_LABELS = ("1m", "5m", "15m")
 MAX_PREVIEW_ROWS = 200
 MAX_TRADES = 300
 MAX_SIGNALS = 100
+MAX_EQUITY_ROWS = 500
 
 
 def _json_safe(value: object) -> object:
@@ -115,6 +118,41 @@ def _backtest_config(slippage: str = "normal", slippage_ticks: int = 1) -> Backt
     else:
         sc = SlippageConfig(mode=slippage)
     return BacktestConfig(costs=CostConfig(), execution=ExecutionConfig(slippage=sc))
+
+
+def _record_backtest_run(
+    *,
+    source: str,
+    month: str,
+    timeframe: str,
+    cfg: StrategyConfig,
+    metrics: dict[str, object],
+    vault_path: str | Path,
+    slippage: str = "normal",
+    experiment_id: str | None = None,
+    variant: str | None = None,
+    equity: pl.DataFrame | None = None,
+) -> int:
+    """Persist one run into the experiment vault; returns the vault id."""
+    return record_run(
+        vault_path=vault_path,
+        source=source,
+        month=month,
+        timeframe=timeframe,
+        config_hash=config_hash(cfg),
+        signal_mode=cfg.signal_mode,
+        fast_ema=cfg.fast_ema,
+        slow_ema=cfg.slow_ema,
+        angle_threshold=cfg.angle_threshold,
+        angle_lookback=cfg.angle_lookback,
+        slippage=slippage,
+        experiment_id=experiment_id,
+        variant=variant,
+        metrics=metrics,
+        equity_start=float(equity["equity"][0]) if equity is not None and equity.height else None,
+        equity_end=float(equity["equity"][-1]) if equity is not None and equity.height else None,
+        equity_bars=equity.height if equity is not None else None,
+    )
 
 
 def _metrics_brief(metrics: dict[str, float | int | str]) -> dict[str, object]:
@@ -341,11 +379,16 @@ def run_backtest_signals(
     slippage: str = "normal",
     slippage_ticks: int = 1,
     include_trades: bool = False,
+    include_equity: bool = False,
+    record: bool = True,
     processed_root: str = str(DEFAULT_PROCESSED_ROOT),
+    vault_path: str = str(DEFAULT_VAULT),
 ) -> dict[str, object]:
     """Backtest a strategy config over a month+timeframe (phase-05 engine).
 
-    Returns full metrics plus (optional, capped at 300) per-trade records.
+    Returns full metrics plus (optional, capped at 300) per-trade records
+    and (optional, capped at 500 bars) the equity curve. Each run is
+    recorded into the experiment vault unless ``record=false``.
     Execution: signals at close -> fills at next candle open + slippage.
     """
     candles = _processed_candles(month, timeframe, processed_root)
@@ -366,12 +409,29 @@ def run_backtest_signals(
             "bars": bt.equity.height,
         },
     }
+    if record:
+        payload["vault_id"] = _record_backtest_run(
+            source="backtest",
+            month=month,
+            timeframe=timeframe,
+            cfg=cfg,
+            metrics=bt.metrics,
+            slippage=slippage,
+            equity=bt.equity,
+            vault_path=vault_path,
+        )
     if include_trades:
         trades = bt.trades.select(
             "trade_id", "entry_time", "exit_time", "direction",
             "entry_price", "exit_price", "quantity", "gross_pnl", "costs", "net_pnl",
         )
         payload["trades"] = trades.head(MAX_TRADES).to_dicts()
+    if include_equity:
+        curve = bt.equity.select("timestamp", "equity")
+        step = max(1, curve.height // MAX_EQUITY_ROWS)
+        payload["equity_curve"] = (
+            curve.gather(pl.int_range(0, curve.height, step)).to_dicts()
+        )
     return _json_safe(payload)
 
 
@@ -379,11 +439,14 @@ def compare_timeframes(
     month: str,
     timeframes: str = "1,5,15",
     angle_threshold: float = 30.0,
+    record: bool = True,
     results_root: str = str(DEFAULT_RESULTS_ROOT),
     processed_root: str = str(DEFAULT_PROCESSED_ROOT),
+    vault_path: str = str(DEFAULT_VAULT),
 ) -> dict[str, object]:
     """Run baseline variants A/B/C across timeframes (phase-06) and return
-    the comparison table with per-experiment metadata."""
+    the comparison table with per-experiment metadata. Every experiment is
+    recorded into the experiment vault unless ``record=false``."""
     year, m = _parse_month(month)
     tfs = _parse_timeframes(timeframes)
     if not all(tf in (1, 5, 15) for tf in tfs):
@@ -398,22 +461,90 @@ def compare_timeframes(
         timeframes=tfs,
         angle_threshold=angle_threshold,
     )
-    records = [
-        {
+    records = []
+    for e in experiments:
+        record_dict: dict[str, object] = {
             "experiment_id": e.experiment_id,
             "variant": e.variant,
             "timeframe": e.timeframe,
             "config_hash": e.config_hash,
             "metrics": _metrics_brief(e.result.metrics),
         }
-        for e in experiments
-    ]
+        if record:
+            record_dict["vault_id"] = _record_backtest_run(
+                source="compare",
+                month=month,
+                timeframe=e.timeframe,
+                cfg=e.config,
+                metrics=e.result.metrics,
+                slippage="normal",
+                experiment_id=e.experiment_id,
+                variant=e.variant,
+                equity=e.result.equity,
+                vault_path=vault_path,
+            )
+        records.append(record_dict)
     return _json_safe(
         {
             "month": month,
             "comparison_table": comparison_table(experiments),
             "experiments": records,
             "experiment_count": len(experiments),
+        }
+    )
+
+
+def vault_query(
+    month: str = "",
+    timeframe: str = "0",
+    signal_mode: str = "",
+    source: str = "",
+    variant: str = "",
+    config_hash: str = "",
+    profitable_only: bool = False,
+    min_trades: int = 0,
+    order_by: str = "net_pnl",
+    ascending: bool = False,
+    limit: int = 100,
+    vault_path: str = str(DEFAULT_VAULT),
+) -> dict[str, object]:
+    """Query the experiment vault of recorded research runs.
+
+    Filters are exact matches (month like '2026-08', timeframe like '5m',
+    signal_mode, source, variant, config_hash); empty means no filter.
+    ``profitable_only`` keeps net_pnl > 0 runs and ``min_trades`` drops
+    thin samples. Ordered by net_pnl descending by default.
+    """
+    filters: dict[str, object] = {
+        "month": month,
+        "timeframe": timeframe,
+        "signal_mode": signal_mode,
+        "source": source,
+        "variant": variant,
+        "config_hash": config_hash,
+    }
+    runs = query_runs(
+        vault_path=vault_path,
+        filters=filters,
+        order_by=order_by,
+        ascending=ascending,
+        limit=limit,
+    )
+    if profitable_only:
+        runs = [r for r in runs if (r.get("net_pnl") or 0) > 0]
+    if min_trades > 0:
+        runs = [r for r in runs if (r.get("total_trades") or 0) >= min_trades]
+    positive = sum(1 for r in runs if (r.get("net_pnl") or 0) > 0)
+    return _json_safe(
+        {
+            "filters": {"month": month, "timeframe": timeframe, "signal_mode": signal_mode,
+                        "source": source, "variant": variant, "config_hash": config_hash,
+                        "profitable_only": profitable_only, "min_trades": min_trades},
+            "order_by": order_by,
+            "ascending": ascending,
+            "count": len(runs),
+            "positive_share": round(positive / len(runs), 3) if runs else 0.0,
+            "runs": runs,
         }
     )
 
@@ -522,6 +653,7 @@ _TOOL_FUNCTIONS = (
     compare_timeframes,
     parameter_search,
     walk_forward_test,
+    vault_query,
 )
 
 TOOL_NAMES = tuple(fn.__name__ for fn in _TOOL_FUNCTIONS)
@@ -543,7 +675,24 @@ def build_server() -> FastMCP:
 
 
 def main() -> None:
-    build_server().run()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="quant-engine MCP server")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "http"),
+        default="stdio",
+        help="MCP transport (stdio for agent runners, http for remote clients)",
+    )
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8010)
+    args = parser.parse_args()
+
+    server = build_server()
+    if args.transport == "http":
+        server.run(transport="http", host=args.host, port=args.port)
+    else:
+        server.run()
 
 
 if __name__ == "__main__":

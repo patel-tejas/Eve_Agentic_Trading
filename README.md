@@ -28,10 +28,29 @@ uv run pytest
 # Import check
 uv run python -c "import quant"
 
-# Frontend (optional, Phase 49+)
+# Frontend (eve chat + dashboard)
 cd apps/web
 npm install
+
+# 1. Serve the quant engine over HTTP (eve connects to it as an MCP server)
+#    in the repo root:
+uv run python -m mcp.quant_server.server --transport http --port 8010
+
+# 2. Run the app (boots the eve agent + chat UI on http://localhost:3000)
 npm run dev
+```
+
+Ask the chat things like *"Backtest August 2026 on 5m"* or *"Which recorded
+configs beat the baseline?"*. Every run is recorded into the experiment
+vault (`data/vault/experiments.db`) and can be revisited with `vault_query`.
+
+## Telegram signal alerts
+
+```bash
+# needs .env: TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID
+uv run python scripts/telegram_alerts.py --once           # single check
+uv run python scripts/telegram_alerts.py --interval 300   # poll loop
+uv run python scripts/telegram_alerts.py --no-send        # dry run
 ```
 
 ## Environment variables

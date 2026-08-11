@@ -24,6 +24,7 @@ from mcp.quant_server.server import (
     process_month_data,
     run_backtest_signals,
     validate_dataset,
+    vault_query,
     walk_forward_test,
 )
 
@@ -110,6 +111,7 @@ def test_tools_registered_and_server_builds():
         "compare_timeframes",
         "parameter_search",
         "walk_forward_test",
+        "vault_query",
     )
     build_server()
 
@@ -271,3 +273,101 @@ def test_walk_forward_test_too_short(tmp_path):
             processed_root=str(tmp_path),
             **TINY_GRIDS,
         )
+
+
+def test_run_backtest_records_into_vault(tmp_path):
+    _write_processed(tmp_path)
+    vault = tmp_path / "exp.db"
+    result = run_backtest_signals(
+        month="2026-07",
+        timeframe="5m",
+        processed_root=str(tmp_path),
+        vault_path=str(vault),
+    )
+    assert result["vault_id"] == 1
+    q = vault_query(vault_path=str(vault))
+    assert q["count"] == 1
+    run = q["runs"][0]
+    assert run["month"] == "2026-07" and run["timeframe"] == "5m"
+    assert run["source"] == "backtest"
+    assert run["config_hash"].startswith("sha256:")
+    assert run["net_pnl"] == result["metrics"]["net_pnl"]
+
+
+def test_run_backtest_record_false_skips_vault(tmp_path):
+    _write_processed(tmp_path)
+    vault = tmp_path / "exp.db"
+    result = run_backtest_signals(
+        month="2026-07",
+        timeframe="5m",
+        record=False,
+        processed_root=str(tmp_path),
+        vault_path=str(vault),
+    )
+    assert "vault_id" not in result
+    assert vault_query(vault_path=str(vault))["count"] == 0
+
+
+def test_run_backtest_include_equity_curve(tmp_path):
+    _write_processed(tmp_path)
+    result = run_backtest_signals(
+        month="2026-07",
+        timeframe="5m",
+        include_equity=True,
+        processed_root=str(tmp_path),
+        vault_path=str(tmp_path / "exp.db"),
+    )
+    curve = result["equity_curve"]
+    assert len(curve) > 0
+    assert curve[0]["equity"] == pytest.approx(1_000_000.0)
+    assert len(curve) <= 500
+
+
+def test_compare_timeframes_records_vault(tmp_path):
+    _write_processed(tmp_path, days=5)
+    vault = tmp_path / "exp.db"
+    result = compare_timeframes(
+        month="2026-07",
+        timeframes="1,5",
+        processed_root=str(tmp_path),
+        results_root=str(tmp_path / "res"),
+        vault_path=str(vault),
+    )
+    q = vault_query(vault_path=str(vault))
+    assert q["count"] == 6
+    variants = {r["variant"] for r in q["runs"]}
+    assert variants == {"A", "B", "C"}
+    for exp in result["experiments"]:
+        assert "vault_id" in exp
+
+
+def test_vault_query_filters(tmp_path):
+    _write_processed(tmp_path)
+    vault = tmp_path / "exp.db"
+    run_backtest_signals(
+        month="2026-07",
+        timeframe="5m",
+        processed_root=str(tmp_path),
+        vault_path=str(vault),
+    )
+    run_backtest_signals(
+        month="2026-07",
+        timeframe="5m",
+        fast_ema=12,
+        slow_ema=21,
+        angle_threshold=20,
+        processed_root=str(tmp_path),
+        vault_path=str(vault),
+    )
+    assert vault_query(vault_path=str(vault))["count"] == 2
+    assert vault_query(vault_path=str(vault), signal_mode="crossover_and_angle")["count"] == 2
+    assert vault_query(vault_path=str(vault), month="2026-08")["count"] == 0
+    aggressive = vault_query(vault_path=str(vault), order_by="fast_ema", ascending=True)["runs"]
+    assert aggressive[0]["fast_ema"] == 9
+    assert vault_query(vault_path=str(vault), profitable_only=True, min_trades=1)["count"] == 0
+    from quant.vault import query_runs
+
+    with pytest.raises(ValueError, match="unsupported vault filters"):
+        query_runs(vault_path=str(vault), filters={"nope": 1})
+    with pytest.raises(ValueError, match="order_by"):
+        query_runs(vault_path=str(vault), order_by="nope")
