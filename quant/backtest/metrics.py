@@ -15,6 +15,62 @@ TRADING_DAYS_PER_YEAR = 252.0
 ANNUALIZATION = math.sqrt(TRADING_DAYS_PER_YEAR)
 
 
+def daily_closing_equity(equity: pl.DataFrame) -> list[float]:
+    """Last equity value of each calendar day, in chronological order."""
+    if equity.height == 0:
+        return []
+    return (
+        equity.sort("timestamp")
+        .with_columns(pl.col("timestamp").dt.date().alias("day_of"))
+        .group_by("day_of")
+        .agg(pl.col("equity").last())
+        .sort("day_of")["equity"]
+        .to_list()
+    )
+
+
+def daily_returns_by_date(equity: pl.DataFrame) -> dict[object, float]:
+    """Day-over-day equity returns keyed by calendar date.
+
+    Two parameter combinations warm up over different numbers of bars (a
+    slow EMA of 25 consumes more history than one of 15), so their return
+    series have different lengths and cannot be stacked positionally. Keying
+    by date lets a caller align them on the days they genuinely share --
+    which is what :func:`quant.research.validate.validate_parameter_search`
+    needs before it can build a trial matrix for PBO.
+    """
+    if equity.height == 0:
+        return {}
+    frame = (
+        equity.sort("timestamp")
+        .with_columns(pl.col("timestamp").dt.date().alias("day_of"))
+        .group_by("day_of")
+        .agg(pl.col("equity").last())
+        .sort("day_of")
+    )
+    dates = frame["day_of"].to_list()
+    values = frame["equity"].to_list()
+    return {
+        d: (b - a) / a if a > 0 else 0.0
+        for d, a, b in zip(dates[1:], values, values[1:])
+    }
+
+
+def daily_returns(equity: pl.DataFrame) -> list[float]:
+    """Simple day-over-day returns of the equity curve.
+
+    The series every statistical test in ``quant.research`` consumes:
+    bootstrap Sharpe intervals, the deflated Sharpe ratio and the
+    permutation test all need the per-period returns, not just the
+    summary Sharpe that :func:`compute_metrics` reports.
+
+    Length is ``len(daily_closing_equity) - 1``; an empty or single-day
+    curve yields ``[]``.
+    """
+    daily = daily_closing_equity(equity)
+    return [(b - a) / a if a > 0 else 0.0 for a, b in zip(daily, daily[1:])]
+
+
 def compute_metrics(
     *,
     trades: pl.DataFrame,
@@ -107,15 +163,7 @@ def _with_equity_metrics(
     m["total_return_pct"] = total_return
 
     days = equity["timestamp"].dt.date().n_unique()
-    daily = (
-        equity.sort("timestamp")
-        .with_columns(pl.col("timestamp").dt.date().alias("day_of"))
-        .group_by("day_of")
-        .agg(pl.col("equity").last())
-        .sort("day_of")["equity"]
-        .to_list()
-    )
-    returns = [(b - a) / a if a > 0 else 0.0 for a, b in zip(daily, daily[1:])]
+    returns = daily_returns(equity)
     mean_r = sum(returns) / len(returns) if returns else 0.0
     if len(returns) > 1:
         var = sum((x - mean_r) ** 2 for x in returns) / (len(returns) - 1)

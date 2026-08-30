@@ -34,3 +34,9 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+
+# Eve dev-server cache (regenerated; 300+ files)
+apps/web/.eve/
+
+# Local experiment vault (SQLite, machine-local)
+data/vault/

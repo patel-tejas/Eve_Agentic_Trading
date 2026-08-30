@@ -19,6 +19,7 @@ Each document covers: what we're building, key concepts, tech stack references, 
 | 06 | [Baseline Results](phase-06_baseline-results.md) | Research |
 | 07 | [Eve Agent](phase-07_eve-agent.md) | Research |
 | 08 | [Advanced Research](phase-08_advanced-research.md) | Research |
+| 08b | [Statistical Validation](phase-08b_statistical-validation.md) | Implemented |
 | 09 | [Snowflake](phase-09_snowflake.md) | Research |
 | 10 | [Real-Time Data](phase-10_real-time-data.md) | Research |
 | 11 | [Kafka](phase-11_kafka.md) | Research |

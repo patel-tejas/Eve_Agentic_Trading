@@ -24,7 +24,7 @@ import polars as pl
 
 from quant.backtest.costs import CostConfig, round_trip_costs
 from quant.backtest.execution import ExecutionConfig, adjusted_price
-from quant.backtest.metrics import compute_metrics
+from quant.backtest.metrics import compute_metrics, daily_returns
 
 Position = Literal["FLAT", "LONG", "SHORT"]
 
@@ -51,6 +51,7 @@ class BacktestResult:
     trades: pl.DataFrame
     equity: pl.DataFrame
     metrics: dict[str, float | int | str]
+    daily_returns: list[float] = field(default_factory=list)
 
 
 TRADE_COLUMNS = [
@@ -197,4 +198,9 @@ def run_backtest(
     )
     equity_df = pl.DataFrame(equity_rows, schema=EQUITY_COLUMNS, orient="row")
     metrics = compute_metrics(trades=trades_df, equity=equity_df, capital=capital)
-    return BacktestResult(trades=trades_df, equity=equity_df, metrics=metrics)
+    return BacktestResult(
+        trades=trades_df,
+        equity=equity_df,
+        metrics=metrics,
+        daily_returns=daily_returns(equity_df),
+    )

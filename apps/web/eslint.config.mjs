@@ -12,6 +12,11 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Eve dev-server cache: vendored snapshots and compiled bundles. Without
+    // this, `npm run lint` reports 20k problems from generated code and the
+    // handful in our own source is unfindable.
+    ".eve/**",
+    "node_modules/**",
   ]),
 ]);
 

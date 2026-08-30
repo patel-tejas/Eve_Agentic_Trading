@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime, timedelta
 
 import polars as pl
 
 from quant.backtest.engine import BacktestConfig, run_backtest
+from quant.backtest.metrics import daily_returns_by_date
 from quant.strategies.ema_9_15 import StrategyConfig, generate_signals
 
 DEFAULT_GRID: dict[str, tuple[int | float, ...]] = {
@@ -45,6 +47,10 @@ class GridResult:
 
     params: dict[str, int | float]
     metrics: dict[str, float | int | str]
+    # Date-keyed so trials with different EMA warm-ups can still be aligned;
+    # deliberately absent from ``to_row`` -- the parquet grid stays scalar.
+    returns_by_date: dict[object, float] = dataclass_field(default_factory=dict)
+    trade_pnls: list[float] = dataclass_field(default_factory=list)
 
     def to_row(self, experiment_id: str) -> dict[str, object]:
         return {
@@ -86,7 +92,12 @@ def evaluate_params(
     cfg = StrategyConfig(**params)
     signals = generate_signals(frame, config=cfg)
     result = run_backtest(frame, signals, backtest_config or BacktestConfig())
-    return GridResult(params=params, metrics=result.metrics)
+    return GridResult(
+        params=params,
+        metrics=result.metrics,
+        returns_by_date=daily_returns_by_date(result.equity),
+        trade_pnls=result.trades["net_pnl"].to_list(),
+    )
 
 
 def parameter_grid_search(

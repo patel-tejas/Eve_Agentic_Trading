@@ -16,7 +16,7 @@ from pathlib import Path
 
 import polars as pl
 
-EXPECTED_BARS_PER_DAY_1M = 375
+EXPECTED_BARS_PER_DAY_1M = 385
 
 
 @dataclass(frozen=True)
@@ -100,7 +100,7 @@ def validate_dataset(
             (pl.col("timestamp").dt.hour() < 9)
             | (pl.col("timestamp").dt.hour() > 15)
             | ((pl.col("timestamp").dt.hour() == 9) & (pl.col("timestamp").dt.minute() < 15))
-            | ((pl.col("timestamp").dt.hour() == 15) & (pl.col("timestamp").dt.minute() >= 30))
+            | ((pl.col("timestamp").dt.hour() == 15) & (pl.col("timestamp").dt.minute() >= 40))
         ).height
     )
     checks.append(
