@@ -122,9 +122,17 @@ write_run_card(
 )
 ```
 
-`SearchValidation.credible` is True only when every test that ran came back
-favourable. A test that could not run is recorded in `skipped` and makes the
-verdict False — a skip is never counted as a pass.
+`SearchValidation.credible` is True only when the three EDGE tests come back
+favourable: deflated Sharpe survives at 95%, the bootstrap interval excludes
+zero, and PBO is not overfit.
+
+The permutation test is deliberately **not** a gate. It measures the shape of
+the equity path, not whether an edge exists, so a strategy with a real edge
+whose losses happened to cluster is not thereby uncredible. Read its p-value
+alongside the verdict, not through it.
+
+A test that could not run is recorded in `skipped` and makes the verdict False
+— a skip is never counted as a pass.
 
 ## Data Contracts
 
@@ -140,6 +148,32 @@ normal-distribution functions needed are implemented in `_stats.py`
 (`norm_ppf` is Acklam's approximation plus one Halley refinement, verified to
 round-trip `norm_cdf` to 1e-12).
 
+## Tool surface
+
+Both phase-08b entry points are exposed through `mcp/quant_server/server.py`,
+so they reach the MCP clients and the web chat alike:
+
+| Tool | Use when |
+|---|---|
+| `backtest_significance` | one config the user supplied — bootstrap Sharpe CI + permutation test, no multiple-testing correction because there was no search |
+| `validate_parameter_search` | a grid search whose winner will be acted on — adds deflated Sharpe and PBO |
+
+The HTTP bridge derives their schemas by introspection, so no frontend change
+was needed to surface them.
+
+### First real run (NIFTY 2026-07, 15m, full 320-combination grid)
+
+```
+Deflated Sharpe: 0.1505 (observed 0.1828 vs luck benchmark 0.3847) -> DOES NOT SURVIVE
+Sharpe 95% CI:   [-3.81, 8.82] -> includes zero
+PBO:             0.686 over 70 splits -> OVERFIT
+VERDICT: not established
+```
+
+The grid's best combination does not survive its own search. This is the
+expected outcome for 320 trials over 23 trading days, and it is the finding
+this phase exists to produce.
+
 ## Definition of Done
 
 - [x] Deflated Sharpe demotes the winner of 320 noise trials below 0.95
@@ -148,7 +182,8 @@ round-trip `norm_cdf` to 1e-12).
 - [x] PBO is >0.5 on noise and <0.5 when one trial has a real edge
 - [x] Default embargo reproduces the existing phase-08 walk-forward schedule
 - [x] Run card detects tampered, missing and unexpected artifacts
-- [x] 73 unit tests, no network, all seeded
+- [x] 78 unit tests for the statistics, plus 17 for the tool surface; no network, all seeded
+- [x] Both entry points reachable as MCP tools and over the HTTP bridge
 
 ## Not In This Phase
 

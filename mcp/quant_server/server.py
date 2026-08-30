@@ -25,6 +25,11 @@ from quant.data.validation import validate_dataset as validate_dataset_engine
 from quant.processing.pipeline import process_month
 from quant.research.baseline import comparison_table, run_baseline
 from quant.research.parameter_search import parameter_grid_search, split_schedule
+from quant.research.significance import (
+    bootstrap_sharpe_ci,
+    monte_carlo_permutation_test,
+)
+from quant.research.validate import validate_parameter_search as validate_search
 from quant.research.walk_forward import walk_forward
 from quant.strategies.ema_9_15 import StrategyConfig, generate_signals
 
@@ -511,6 +516,142 @@ def walk_forward_test(
     )
 
 
+def backtest_significance(
+    month: str,
+    timeframe: str = "1m",
+    fast_ema: int = 9,
+    slow_ema: int = 15,
+    angle_threshold: float = 30.0,
+    angle_lookback: int = 1,
+    signal_mode: str = "crossover_and_angle",
+    slippage: str = "normal",
+    slippage_ticks: int = 1,
+    iterations: int = 1000,
+    seed: int = 20260831,
+    confidence: float = 0.95,
+    processed_root: str = str(DEFAULT_PROCESSED_ROOT),
+) -> dict[str, object]:
+    """Is ONE backtest distinguishable from luck? (phase-08b)
+
+    Runs the config, then two resampling tests on its own output: a bootstrap
+    confidence interval around the Sharpe ratio, and a Monte Carlo permutation
+    test on the ordering of the realised trades. Seeded, so the same inputs
+    give the same verdict.
+
+    Read ``sharpe_ci.excludes_zero`` as the headline. The permutation p-value
+    describes the shape of the equity path only -- it is not an edge test.
+    """
+    if not 1 <= iterations <= 20_000:
+        raise ValueError("iterations must be 1..20000")
+    candles = _processed_candles(month, timeframe, processed_root)
+    cfg = StrategyConfig(
+        **_param_dict(fast_ema, slow_ema, angle_threshold, angle_lookback, signal_mode)
+    )
+    signals = generate_signals(candles, config=cfg, timeframe=timeframe)
+    # Same slippage arguments as run_backtest_signals: the two tools must not
+    # report different metrics for the same stated config.
+    result = run_backtest(candles, signals, _backtest_config(slippage, slippage_ticks))
+
+    returns = result.daily_returns
+    trade_pnls = result.trades["net_pnl"].to_list()
+
+    bootstrap: dict[str, object] | None = None
+    permutation: dict[str, object] | None = None
+    skipped: dict[str, str] = {}
+
+    if len(returns) >= 2:
+        bootstrap = bootstrap_sharpe_ci(
+            returns, confidence=confidence, iterations=iterations, seed=seed
+        ).to_dict()
+    else:
+        skipped["sharpe_ci"] = f"{len(returns)} daily returns, need >= 2"
+
+    if len(trade_pnls) >= 2:
+        permutation = monte_carlo_permutation_test(
+            trade_pnls, iterations=iterations, seed=seed
+        ).to_dict()
+    else:
+        skipped["permutation"] = f"{len(trade_pnls)} trades, need >= 2"
+
+    return _json_safe(
+        {
+            "month": month,
+            "timeframe": timeframe,
+            "config": cfg.model_dump(),
+            "slippage": slippage,
+            "metrics": _metrics_brief(result.metrics),
+            "daily_returns_count": len(returns),
+            "sharpe_ci": bootstrap,
+            "permutation": permutation,
+            "skipped": skipped,
+            "note": (
+                "A single backtest carries no multiple-testing correction. If "
+                "these parameters were chosen by a grid search, use "
+                "validate_parameter_search instead."
+            ),
+        }
+    )
+
+
+def validate_parameter_search(
+    month: str,
+    timeframe: str = "15m",
+    fast_emas: str = "5,7,9,12",
+    slow_emas: str = "15,18,21,25",
+    angle_thresholds: str = "20,25,30,35,40",
+    angle_lookbacks: str = "1,2,3,5",
+    select_by: str = "net_pnl",
+    iterations: int = 1000,
+    seed: int = 20260831,
+    processed_root: str = str(DEFAULT_PROCESSED_ROOT),
+) -> dict[str, object]:
+    """Grid-search AND say whether the winner survives the search (phase-08b).
+
+    parameter_search reports the best of N combinations. The maximum of N
+    draws is comfortably positive even when every combination is worthless,
+    so this tool applies the corrections that number needs: deflated Sharpe
+    (vs the Sharpe the best of N reaches by luck), a bootstrap Sharpe
+    interval, a permutation test on the winner's trade ordering, and PBO
+    (does the SELECTION PROCEDURE generalise?).
+
+    ``credible`` is true only when the deflated Sharpe, the bootstrap
+    interval and PBO all come back favourable. Prefer 15m: the full 320
+    combination grid takes ~3s there and far longer on 1m.
+
+    WINDOW: unlike ``parameter_search``, which calibrates on the train split
+    only, this searches the WHOLE month. Nothing is held out here -- PBO does
+    the generalisation test by recombining in-sample/out-of-sample blocks
+    across the full timeline -- so the two tools search different data and
+    their "best params" can legitimately differ. Uses normal slippage.
+    """
+    if not 1 <= iterations <= 20_000:
+        raise ValueError("iterations must be 1..20000")
+    candles = _processed_candles(month, timeframe, processed_root)
+    grid: dict[str, tuple[object, ...]] = {
+        "fast_ema": tuple(_parse_int_list(fast_emas)),
+        "slow_ema": tuple(_parse_int_list(slow_emas)),
+        "angle_threshold": tuple(_parse_float_list(angle_thresholds)),
+        "angle_lookback": tuple(_parse_int_list(angle_lookbacks)),
+    }
+    report = validate_search(
+        candles,
+        grid=grid,
+        backtest_config=_backtest_config(),
+        select_by=select_by,
+        iterations=iterations,
+        seed=seed,
+    )
+    payload = report.to_dict()
+    payload.update(
+        {
+            "month": month,
+            "timeframe": timeframe,
+            "summary": report.summary_lines(),
+        }
+    )
+    return _json_safe(payload)
+
+
 _TOOL_FUNCTIONS = (
     list_research_months,
     get_historical_candles,
@@ -522,6 +663,8 @@ _TOOL_FUNCTIONS = (
     compare_timeframes,
     parameter_search,
     walk_forward_test,
+    backtest_significance,
+    validate_parameter_search,
 )
 
 TOOL_NAMES = tuple(fn.__name__ for fn in _TOOL_FUNCTIONS)

@@ -161,3 +161,100 @@ def test_missing_required_argument_is_a_400(client: TestClient) -> None:
     res = client.post("/tools/run_backtest_signals", json={})
     assert res.status_code == 400
     assert "TypeError" in res.json()["error"]
+
+
+# --------------------------------------------------------------------------
+# phase-08b validation tools (added to the tool surface in this change)
+# --------------------------------------------------------------------------
+
+
+VALIDATION_TOOLS = ("backtest_significance", "validate_parameter_search")
+
+
+def test_validation_tools_are_served(client: TestClient) -> None:
+    """Adding them to _TOOL_FUNCTIONS must publish them on both surfaces."""
+    names = {entry["name"] for entry in tool_manifest()}
+    assert set(VALIDATION_TOOLS) <= names
+    assert set(VALIDATION_TOOLS) <= set(TOOL_NAMES)
+
+
+@needs_data
+def test_backtest_significance_returns_a_seeded_verdict(client: TestClient) -> None:
+    args = {"month": "2026-07", "timeframe": "15m", "iterations": 200, "seed": 7}
+    first = client.post("/tools/backtest_significance", json=args)
+    assert first.status_code == 200
+    body = first.json()["result"]
+
+    assert body["sharpe_ci"]["confidence"] == 0.95
+    assert "excludes_zero" in body["sharpe_ci"]
+    assert 0.0 < body["permutation"]["p_value"] <= 1.0
+    assert body["metrics"]["total_trades"] >= 0
+
+    # Same seed, same answer — the property that makes it safe in a run card.
+    second = client.post("/tools/backtest_significance", json=args).json()["result"]
+    assert second["sharpe_ci"] == body["sharpe_ci"]
+    assert second["permutation"]["p_value"] == body["permutation"]["p_value"]
+
+
+@needs_data
+def test_validate_parameter_search_reports_the_full_verdict(
+    client: TestClient,
+) -> None:
+    res = client.post(
+        "/tools/validate_parameter_search",
+        json={
+            "month": "2026-07",
+            "timeframe": "15m",
+            # A small grid keeps the test quick; the shape is what matters.
+            "fast_emas": "5,9",
+            "slow_emas": "15,21",
+            "angle_thresholds": "20,30",
+            "angle_lookbacks": "1,2",
+            "iterations": 100,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()["result"]
+
+    assert body["n_trials"] == 16
+    assert body["deflated_sharpe"]["n_trials"] == 16
+    assert isinstance(body["credible"], bool)
+    assert any("VERDICT" in line for line in body["summary"])
+    # The multiple-testing correction is the whole point of this tool.
+    assert body["deflated_sharpe"]["expected_max_sharpe"] > 0.0
+
+
+@needs_data
+def test_validation_tools_reject_absurd_iteration_counts(client: TestClient) -> None:
+    for tool in VALIDATION_TOOLS:
+        res = client.post(
+            f"/tools/{tool}",
+            json={"month": "2026-07", "timeframe": "15m", "iterations": 10**7},
+        )
+        assert res.status_code == 400, tool
+        assert "iterations" in res.json()["error"]
+
+
+@needs_data
+def test_significance_and_backtest_agree_on_the_same_config(
+    client: TestClient,
+) -> None:
+    """Two tools, one stated config, one set of numbers.
+
+    ``backtest_significance`` originally ignored slippage and always used the
+    default, so it could report different metrics than ``run_backtest_signals``
+    for what the user asked for as the same run. In a system whose premise is
+    that every figure is traceable, that divergence is the bug.
+    """
+    for slippage in ("normal", "pessimistic"):
+        args = {"month": "2026-07", "timeframe": "15m", "slippage": slippage}
+        plain = client.post("/tools/run_backtest_signals", json=args)
+        signif = client.post(
+            "/tools/backtest_significance", json={**args, "iterations": 50}
+        )
+        assert plain.status_code == signif.status_code == 200
+        a = plain.json()["result"]["metrics"]
+        b = signif.json()["result"]["metrics"]
+        for key in ("net_pnl", "sharpe", "total_trades", "profit_factor"):
+            assert a[key] == pytest.approx(b[key]), f"{slippage}/{key}"
+        assert signif.json()["result"]["slippage"] == slippage

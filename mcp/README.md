@@ -17,6 +17,13 @@ the Eve agent. **Implemented in Phase 07.**
 | `compare_timeframes` | `quant.research.baseline` |
 | `parameter_search` | `quant.research.parameter_search` |
 | `walk_forward_test` | `quant.research.walk_forward` |
+| `backtest_significance` | `quant.research.significance` (phase 08b) |
+| `validate_parameter_search` | `quant.research.validate` (phase 08b) |
+
+`parameter_search` reports the best of ~320 combinations; `validate_parameter_search`
+runs the same grid and adds the corrections that number needs (deflated Sharpe,
+bootstrap interval, PBO). Prefer the latter whenever a search result is going to
+be acted on.
 
 Design rules (see `server.py` docstring): the server validates arguments,
 calls `quant/`, and serializes JSON-safe results. **No financial logic

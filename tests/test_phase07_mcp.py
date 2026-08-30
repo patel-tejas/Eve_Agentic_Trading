@@ -110,6 +110,9 @@ def test_tools_registered_and_server_builds():
         "compare_timeframes",
         "parameter_search",
         "walk_forward_test",
+        # phase 08b: the statistical validation surface
+        "backtest_significance",
+        "validate_parameter_search",
     )
     build_server()
 
