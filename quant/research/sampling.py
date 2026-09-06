@@ -20,6 +20,7 @@ the ``n_trials`` that the deflated Sharpe ratio is penalized against.
 from __future__ import annotations
 
 import itertools
+import math
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
@@ -43,6 +44,15 @@ def canonical_params(strategy_id: str, params: Mapping[str, Any]) -> Params:
     rules are added for them.
     """
     out = dict(params)
+    if strategy_id == "ema_ha":
+        # wick_ratio/opp_wick_ratio only affect the hammer/inverted-hammer
+        # tests -- irrelevant when pattern_set="doji_only" only ever
+        # checks ha_is_doji (see quant.strategies.ema_ha_pattern).
+        if out.get("pattern_set") == "doji_only":
+            out.pop("wick_ratio", None)
+            out.pop("opp_wick_ratio", None)
+            out.pop("hammer_body_pct", None)
+        return out
     if strategy_id != "ema":
         return out
 
@@ -100,6 +110,56 @@ def canonical_params(strategy_id: str, params: Mapping[str, Any]) -> Params:
             out.pop(key, None)
     elif trail_mode == "atr":
         out.pop("breakeven_at_r", None)
+
+    return out
+
+
+def canonical_exits(exits: Mapping[str, Any], *, position_size: int = 1) -> Params:
+    """Drop/quantise exit-config keys made inert by another exit setting,
+    for the Phase 11 scale-out ladder search (mirrors ``canonical_params``
+    above, but operates on the ``ExitConfig`` dict rather than a
+    strategy's own params -- the two are always swept independently, see
+    ``quant.research.sweep.Trial.exits`` vs ``Trial.params``).
+
+    ``scale_out`` leg fractions are quantised to the ACTUAL lot count
+    they resolve to at ``position_size`` (mirroring
+    ``quant.backtest.engine``'s ``math.floor(fraction * position_size)``)
+    and rewritten as that quantised fraction -- two fractions that floor
+    to the same lot count (e.g. 0.30 and 0.33 at position_size=4, both 1
+    lot) are behaviourally IDENTICAL trials and must hash the same, or
+    ``--resume`` dedup breaks and ``cumulative_trial_count`` (the
+    ``n_trials`` the deflated Sharpe is penalized against) is inflated by
+    duplicates.
+    """
+    out = dict(exits)
+
+    trail_mode = out.get("trail_mode", "none")
+    if trail_mode == "none":
+        for key in ("trail_atr_mult", "breakeven_at_r", "trail_buffer_atr", "trail_after_leg"):
+            out.pop(key, None)
+    else:
+        if trail_mode not in ("atr", "breakeven_then_atr"):
+            out.pop("trail_atr_mult", None)
+        if trail_mode != "breakeven_then_atr":
+            out.pop("breakeven_at_r", None)
+        if trail_mode != "prev_candle_extreme":
+            out.pop("trail_buffer_atr", None)
+
+    scale_out = out.get("scale_out")
+    if scale_out:
+        quantised = []
+        for leg in scale_out:
+            leg_lots = math.floor(leg["fraction"] * position_size + 1e-9)
+            quantised.append({"at_r": leg["at_r"], "fraction": leg_lots / position_size})
+        out["scale_out"] = tuple(sorted((leg["at_r"], leg["fraction"]) for leg in quantised))
+        if out.get("after_leg1_stop") == "breakeven":
+            # Only the FIRST leg (by at_r) matters for whether breakeven
+            # has anything to arm against; already captured by scale_out
+            # itself, nothing further to prune.
+            pass
+    else:
+        out.pop("after_leg1_stop", None)
+        out.pop("trail_after_leg", None)
 
     return out
 

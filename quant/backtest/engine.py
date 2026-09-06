@@ -23,17 +23,30 @@ precedence rules are documented in ``quant.backtest.exits``.
 Signal-driven entries and reversals still only ever fill at the *next*
 bar's open -- bracket exits are the only thing allowed to fill within
 the bar it triggers on.
+
+Phase 11: optional partial scale-out ladder (``ExitConfig.scale_out``).
+Every exit -- signal reversal, stop, target, trail, time, EOD, and
+end-of-data -- is implemented as ONE OR MORE "legs" against a running
+``remaining_qty``, consolidated into a SINGLE trades-frame row per
+logical trade (never one row per leg -- see the module-level note on
+why that distinction matters for every downstream metric). With
+``scale_out=()`` (the default), a trade always closes in exactly one
+leg, and every field emitted is numerically identical to the pre-Phase-11
+single-exit engine -- this equivalence is a regression test, not an
+assumption.
 """
 
 from __future__ import annotations
 
+import json
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
 import polars as pl
 
-from quant.backtest.costs import CostConfig, round_trip_costs
+from quant.backtest.costs import CostConfig, cost_of_order
 from quant.backtest.execution import ExecutionConfig, adjusted_price
 from quant.backtest.exits import ExitConfig
 from quant.backtest.market import MarketContext
@@ -61,6 +74,12 @@ class BacktestConfig:
     def quantity(self) -> int:
         lot = self.market.lot_size if self.market is not None else self.lot_size
         return self.position_size * lot
+
+    @property
+    def lot_count(self) -> int:
+        """The contract count of ONE lot -- needed to quantise scale-out
+        legs (sized in lots, never fractional contracts)."""
+        return self.market.lot_size if self.market is not None else self.lot_size
 
     @property
     def tick_size(self) -> float:
@@ -99,6 +118,11 @@ TRADE_COLUMNS = [
     "mfe",
     "bars_held",
     "r_multiple",
+    # Phase 11 additions -- appended, never inserted. n_legs=1 and a
+    # single-entry exit_legs_json for every trade that never used
+    # ExitConfig.scale_out (i.e. every pre-Phase-11 trade).
+    "n_legs",
+    "exit_legs_json",
 ]
 
 EQUITY_COLUMNS = ["timestamp", "equity", "unrealized", "realized"]
@@ -181,6 +205,39 @@ def _bracket_hit(
     return None, None
 
 
+def _level_hit(
+    *, direction: str, level: float, o: float, h: float, low: float
+) -> float | None:
+    """Whether ONE level (a stop, or a single scale-out leg's target) is
+    reached this bar, conservative (gap-through fills at the open).
+    Returns the fill price, or ``None`` if not reached."""
+    if direction == "LONG":
+        if o >= level:
+            return o
+        if h >= level:
+            return level
+    else:
+        if o <= level:
+            return o
+        if low <= level:
+            return level
+    return None
+
+
+def _stop_hit(*, direction: str, sl_level: float, o: float, h: float, low: float) -> float | None:
+    if direction == "LONG":
+        if o <= sl_level:
+            return o
+        if low <= sl_level:
+            return sl_level
+    else:
+        if o >= sl_level:
+            return o
+        if h >= sl_level:
+            return sl_level
+    return None
+
+
 def run_backtest(
     candles: pl.DataFrame,
     signals: pl.DataFrame,
@@ -247,6 +304,32 @@ def run_backtest(
     tick = cfg.tick_size
     capital = cfg.initial_capital
 
+    # Phase 11: pre-compute the scale-out schedule ONCE -- it does not
+    # depend on entry price/direction, only on position sizing. Sized in
+    # LOTS first (never fractional contracts -- NIFTY's lot of 65 is
+    # indivisible), then converted to contracts. Legs are kept sorted by
+    # ascending at_r so they are always checked nearest-target-first.
+    scale_schedule: list[tuple[float, int]] = []  # (at_r, leg_qty_contracts)
+    if exits.scale_out:
+        lot_count = cfg.lot_count
+        position_lots = cfg.position_size
+        assigned_lots = 0
+        for leg in sorted(exits.scale_out, key=lambda leg: leg.at_r):
+            leg_lots = math.floor(leg.fraction * position_lots + 1e-9)
+            if leg_lots <= 0:
+                raise ValueError(
+                    f"ScaleLeg(at_r={leg.at_r}, fraction={leg.fraction}) quantises to 0 "
+                    f"lots at position_size={position_lots} lots; increase position_size "
+                    "or the leg's fraction."
+                )
+            assigned_lots += leg_lots
+            scale_schedule.append((leg.at_r, leg_lots * lot_count))
+        if assigned_lots > position_lots:
+            raise ValueError(
+                f"ExitConfig.scale_out legs sum to {assigned_lots} lots, exceeding "
+                f"position_size={position_lots} lots."
+            )
+
     trades: list[dict[str, object]] = []
     equity_rows: list[dict[str, object]] = []
 
@@ -255,7 +338,7 @@ def run_backtest(
     entry_time: datetime | None = None
     entry_price = 0.0
     entry_idx = 0
-    realized = 0.0  # cumulative realized net P&L
+    realized = 0.0  # cumulative realized net P&L, updated once per FULLY CLOSED trade
 
     # Bracket state for the current open trade (irrelevant while FLAT).
     sl_level: float | None = None
@@ -265,6 +348,17 @@ def run_backtest(
     trail_active = False
     mae = 0.0  # max adverse excursion (positive number, in price units)
     mfe = 0.0  # max favourable excursion (positive number, in price units)
+
+    # Phase 11 scale-out state. ``remaining_qty`` == ``quantity`` and
+    # ``banked_gross`` == 0.0 for the ENTIRE life of any trade that never
+    # uses ExitConfig.scale_out -- so the mark-to-market formula below is
+    # unified across both paths without changing legacy numbers.
+    remaining_qty = 0
+    filled_legs: list[dict[str, object]] = []
+    filled_leg_indices: set[int] = set()
+    legs_filled_count = 0
+    banked_gross = 0.0
+    breakeven_from_bar: int | None = None  # bar index breakeven becomes effective, if armed
 
     def _in_entry_window(t: datetime) -> bool:
         tod = t.time()
@@ -277,6 +371,8 @@ def run_backtest(
     def open_trade(direction_label: str, price: float, i: int) -> None:
         nonlocal position, entry_time, entry_price, entry_idx
         nonlocal sl_level, tp_level, risk, best_price, trail_active, mae, mfe
+        nonlocal remaining_qty, filled_legs, filled_leg_indices, legs_filled_count
+        nonlocal banked_gross, breakeven_from_bar
         position = "LONG" if direction_label == "LONG" else "SHORT"
         entry_time = times[i]
         entry_price = price
@@ -285,6 +381,12 @@ def run_backtest(
         trail_active = False
         mae = 0.0
         mfe = 0.0
+        remaining_qty = quantity
+        filled_legs = []
+        filled_leg_indices = set()
+        legs_filled_count = 0
+        banked_gross = 0.0
+        breakeven_from_bar = None
         # ATR sizing uses the last FULLY CLOSED bar before the fill (i-1),
         # never the fill bar itself -- the stop/target level must be known
         # before it is used.
@@ -298,40 +400,101 @@ def run_backtest(
             signal_target=signal_targets[i],
         )
 
-    def close_trade(
-        direction: str, exit_price: float, i: int, closed_at_end: bool, exit_reason: str
-    ) -> None:
-        nonlocal realized, trade_id, position, entry_time, entry_price, entry_idx
+    def _add_leg(exit_reason: str, price: float, qty: int, i: int) -> None:
+        """Record one exit leg (partial or full) against the CURRENTLY
+        open trade; reduces ``remaining_qty`` and banks its gross P&L.
+        Never touches ``costs``/``realized`` directly -- those are
+        settled once, in ``_finalize_trade``, exactly where the legacy
+        single-exit engine settled them."""
+        nonlocal remaining_qty, banked_gross, legs_filled_count, breakeven_from_bar
+        sign = 1.0 if position == "LONG" else -1.0
+        banked_gross += (price - entry_price) * qty * sign
+        remaining_qty -= qty
+        filled_legs.append({"qty": qty, "price": price, "reason": exit_reason, "time": times[i]})
+        legs_filled_count += 1
+        if (
+            legs_filled_count == 1
+            and exits.after_leg1_stop == "breakeven"
+            and breakeven_from_bar is None
+        ):
+            # Effective from the NEXT bar only -- never the bar that
+            # filled leg 1 itself (see _update_trailing_stop).
+            breakeven_from_bar = i + 1
+
+    def _finalize_trade(i: int, closed_at_end: bool) -> None:
+        """Consolidate every leg of the CURRENT trade (1 leg for every
+        trade that never touches ExitConfig.scale_out) into ONE
+        trades-frame row. This is what keeps `total_trades`, `win_rate`,
+        `profit_factor`, the pre-registered MIN_TRADES gate, and the
+        permutation/bootstrap significance tests all correct under
+        partial exits -- see quant.backtest.engine module docstring."""
+        nonlocal realized, trade_id, position, entry_time
+        direction = position
         sign = 1.0 if direction == "LONG" else -1.0
-        gross = (exit_price - entry_price) * quantity * sign
-        costs = round_trip_costs(entry_price, exit_price, quantity, direction, cfg.costs)
+        entry_side = "buy" if direction == "LONG" else "sell"
+        exit_side = "sell" if direction == "LONG" else "buy"
+
+        total_qty = sum(int(leg["qty"]) for leg in filled_legs)
+        exit_price = sum(leg["price"] * leg["qty"] for leg in filled_legs) / total_qty
+        gross = banked_gross
+        costs = cost_of_order(entry_price, total_qty, entry_side, cfg.costs) + sum(
+            cost_of_order(leg["price"], leg["qty"], exit_side, cfg.costs) for leg in filled_legs
+        )
         net = gross - costs
         realized += net
         trade_id += 1
+        final_leg = filled_legs[-1]
         r_multiple = ((exit_price - entry_price) * sign / risk) if risk else None
+
         trades.append(
             {
                 "trade_id": trade_id,
                 "entry_time": entry_time,
-                "exit_time": times[i],
+                "exit_time": final_leg["time"],
                 "direction": direction,
                 "entry_price": entry_price,
                 "exit_price": exit_price,
-                "quantity": quantity,
+                "quantity": total_qty,
                 "gross_pnl": gross,
                 "costs": costs,
                 "net_pnl": net,
                 "holding_periods": i - entry_idx,
                 "closed_at_end": int(closed_at_end),
-                "exit_reason": exit_reason,
+                "exit_reason": final_leg["reason"],
                 "mae": mae,
                 "mfe": mfe,
                 "bars_held": i - entry_idx,
                 "r_multiple": r_multiple,
+                "n_legs": len(filled_legs),
+                "exit_legs_json": json.dumps(
+                    [
+                        {
+                            "qty": leg["qty"],
+                            "price": leg["price"],
+                            "reason": leg["reason"],
+                            "time": leg["time"].isoformat(),
+                        }
+                        for leg in filled_legs
+                    ]
+                ),
             }
         )
         position = "FLAT"
         entry_time = None
+
+    def close_trade(
+        direction: str, exit_price: float, i: int, closed_at_end: bool, exit_reason: str
+    ) -> None:
+        """Close 100% of whatever remains of the current trade in ONE
+        leg. Signature unchanged from the pre-Phase-11 engine -- every
+        existing call site (signal reversal, legacy bracket exit,
+        end-of-data force-close) needs no edit. For a trade that never
+        partially filled (remaining_qty == quantity, the overwhelming
+        majority), this reproduces the pre-Phase-11 gross/costs/net/
+        r_multiple formulas exactly: cost_of_order(entry, full_qty) +
+        cost_of_order(exit, full_qty) == the old round_trip_costs(...)."""
+        _add_leg(exit_reason, exit_price, remaining_qty, i)
+        _finalize_trade(i, closed_at_end)
 
     def _update_excursion(direction: str, h: float | None, low: float | None) -> None:
         """MAE/MFE tracked from the bar's high/low when available."""
@@ -346,7 +509,8 @@ def run_backtest(
             mae = max(mae, h - entry_price)
 
     def _update_trailing_stop(i: int) -> None:
-        """Advance the trailing stop using bars <= i-1 only (never bar i).
+        """Advance the trailing stop / breakeven-after-leg-1 using bars
+        <= i-1 only (never bar i).
 
         No-op on the entry bar itself (``i == entry_idx``): there is no
         bar within this trade yet to trail from, and ``best_price`` is
@@ -354,10 +518,13 @@ def run_backtest(
         This is the guard that stops a bar's own high/low from setting a
         trail level that the SAME bar's low/high could then trip --
         intrabar look-ahead, and the most common way a bracket engine
-        manufactures fake profit.
+        manufactures fake profit. The breakeven-after-leg-1 move is
+        guarded the same way via ``breakeven_from_bar = i + 1`` at the
+        bar leg 1 actually filled (see ``_add_leg``), so it can only take
+        effect starting the NEXT bar, never the fill bar itself.
         """
         nonlocal sl_level, best_price, trail_active
-        if exits.trail_mode == "none" or i <= entry_idx:
+        if i <= entry_idx:
             return
         prev_h, prev_low = highs[i - 1], lows[i - 1]
         if prev_h is None or prev_low is None:
@@ -366,6 +533,25 @@ def run_backtest(
             best_price = max(best_price, prev_h)
         else:
             best_price = min(best_price, prev_low)
+
+        if (
+            exits.after_leg1_stop == "breakeven"
+            and breakeven_from_bar is not None
+            and i >= breakeven_from_bar
+        ):
+            if position == "LONG":
+                sl_level = max(sl_level, entry_price) if sl_level is not None else entry_price
+            else:
+                sl_level = min(sl_level, entry_price) if sl_level is not None else entry_price
+
+        # trail_after_leg gates ONLY the ATR / prev-candle-extreme
+        # trailing below, never the breakeven move above (which has its
+        # own dedicated gate, breakeven_from_bar). Default 0 means
+        # "trail immediately" -- a strict no-op for any trade that never
+        # fills a scale-out leg (legs_filled_count stays 0 forever, and
+        # 0 < 0 is False).
+        if legs_filled_count < exits.trail_after_leg:
+            return
 
         prev_atr = atrs[i - 1] if atrs[i - 1] is not None else None
 
@@ -388,6 +574,82 @@ def run_backtest(
                 else:
                     candidate = best_price + exits.trail_atr_mult * prev_atr
                     sl_level = min(sl_level, candidate) if sl_level is not None else candidate
+
+        if exits.trail_mode == "prev_candle_extreme":
+            buffer = (
+                exits.trail_buffer_atr * prev_atr
+                if (prev_atr is not None and exits.trail_buffer_atr > 0)
+                else 0.0
+            )
+            if position == "LONG":
+                candidate = prev_low - buffer
+                sl_level = max(sl_level, candidate) if sl_level is not None else candidate
+            else:
+                candidate = prev_h + buffer
+                sl_level = min(sl_level, candidate) if sl_level is not None else candidate
+
+    def _process_scale_out_bar(i: int) -> None:
+        """The Phase-11 bracket path, used only when
+        ``exits.scale_out`` is non-empty. Precedence within one bar:
+        1. full stop (closes 100% of what remains, stop wins ties --
+           checked before any leg, matching the legacy convention);
+        2. scale-out legs, ascending ``at_r``, several may fill in one
+           bar; a leg that empties ``remaining_qty`` finalizes the trade
+           immediately;
+        3. if still open, a runner target (``target_mode``), if any;
+        4. if still open, time-stop / EOD, exactly as the legacy path.
+        """
+        direction = position
+        o, h, low_ = opens[i], highs[i], lows[i]
+
+        if sl_level is not None and h is not None and low_ is not None:
+            stop_price = _stop_hit(direction=direction, sl_level=sl_level, o=o, h=h, low=low_)
+            if stop_price is not None:
+                side = "sell" if direction == "LONG" else "buy"
+                exit_px = adjusted_price(stop_price, side, slippage, tick)
+                close_trade(direction, exit_px, i, closed_at_end=False, exit_reason="stop")
+                return
+
+        if h is not None and low_ is not None:
+            for idx, (at_r, leg_qty) in enumerate(scale_schedule):
+                if idx in filled_leg_indices or risk is None:
+                    continue
+                sign = 1.0 if direction == "LONG" else -1.0
+                level = entry_price + sign * at_r * risk
+                hit_price = _level_hit(direction=direction, level=level, o=o, h=h, low=low_)
+                if hit_price is None:
+                    continue
+                side = "sell" if direction == "LONG" else "buy"
+                exit_px = adjusted_price(hit_price, side, slippage, tick)
+                qty = min(leg_qty, remaining_qty)
+                _add_leg("target", exit_px, qty, i)
+                filled_leg_indices.add(idx)
+                if remaining_qty == 0:
+                    _finalize_trade(i, closed_at_end=False)
+                    return
+
+        if position == "FLAT":
+            return  # defensive; _finalize_trade above already returned
+
+        if tp_level is not None and h is not None and low_ is not None:
+            target_price = _level_hit(direction=direction, level=tp_level, o=o, h=h, low=low_)
+            if target_price is not None:
+                side = "sell" if direction == "LONG" else "buy"
+                exit_px = adjusted_price(target_price, side, slippage, tick)
+                close_trade(direction, exit_px, i, closed_at_end=False, exit_reason="target")
+                return
+
+        bars_in_trade = i - entry_idx
+        reason = None
+        price = None
+        if exits.time_stop_bars > 0 and bars_in_trade >= exits.time_stop_bars:
+            reason, price = "time", closes[i]
+        if reason is None and eod_t is not None and times[i].time() >= eod_t:
+            reason, price = "eod", closes[i]
+        if reason is not None:
+            side = "sell" if direction == "LONG" else "buy"
+            exit_px = adjusted_price(price, side, slippage, tick)
+            close_trade(direction, exit_px, i, closed_at_end=False, exit_reason=reason)
 
     for i in range(n):
         pending = next_signal[i - 1] if i > 0 else None
@@ -415,37 +677,44 @@ def run_backtest(
         #    or on any later bar the position remains open.
         if position != "FLAT" and exits.enabled:
             _update_excursion(position, highs[i], lows[i])
-            if exits.trail_mode != "none":
+            if exits.trail_mode != "none" or exits.after_leg1_stop == "breakeven":
                 _update_trailing_stop(i)
 
-            reason, price = (None, None)
-            if needs_ohlc and highs[i] is not None and lows[i] is not None:
-                reason, price = _bracket_hit(
-                    direction=position,
-                    sl_level=sl_level,
-                    tp_level=tp_level,
-                    o=opens[i],
-                    h=highs[i],
-                    low=lows[i],
-                )
-            bars_in_trade = i - entry_idx
-            time_stop_hit = exits.time_stop_bars > 0 and bars_in_trade >= exits.time_stop_bars
-            if reason is None and time_stop_hit:
-                reason, price = "time", closes[i]
-            if reason is None and eod_t is not None and times[i].time() >= eod_t:
-                reason, price = "eod", closes[i]
+            if exits.scale_out:
+                _process_scale_out_bar(i)
+            else:
+                reason, price = (None, None)
+                if needs_ohlc and highs[i] is not None and lows[i] is not None:
+                    reason, price = _bracket_hit(
+                        direction=position,
+                        sl_level=sl_level,
+                        tp_level=tp_level,
+                        o=opens[i],
+                        h=highs[i],
+                        low=lows[i],
+                    )
+                bars_in_trade = i - entry_idx
+                time_stop_hit = exits.time_stop_bars > 0 and bars_in_trade >= exits.time_stop_bars
+                if reason is None and time_stop_hit:
+                    reason, price = "time", closes[i]
+                if reason is None and eod_t is not None and times[i].time() >= eod_t:
+                    reason, price = "eod", closes[i]
 
-            if reason is not None:
-                side = "sell" if position == "LONG" else "buy"
-                exit_px = adjusted_price(price, side, slippage, tick)
-                close_trade(position, exit_px, i, closed_at_end=False, exit_reason=reason)
+                if reason is not None:
+                    side = "sell" if position == "LONG" else "buy"
+                    exit_px = adjusted_price(price, side, slippage, tick)
+                    close_trade(position, exit_px, i, closed_at_end=False, exit_reason=reason)
 
-        # Mark to market at this bar's close
+        # Mark to market at this bar's close. ``banked_gross`` and
+        # ``remaining_qty`` are exactly ``0.0``/``quantity`` for the
+        # entire life of any trade that never uses ExitConfig.scale_out,
+        # so this is numerically identical to the pre-Phase-11 formula
+        # for every existing test.
         unrealized = 0.0
         if position == "LONG":
-            unrealized = (closes[i] - entry_price) * quantity
+            unrealized = banked_gross + (closes[i] - entry_price) * remaining_qty
         elif position == "SHORT":
-            unrealized = (entry_price - closes[i]) * quantity
+            unrealized = banked_gross + (entry_price - closes[i]) * remaining_qty
         equity_rows.append(
             {
                 "timestamp": times[i],
@@ -481,6 +750,8 @@ def run_backtest(
             "mfe": pl.Float64,
             "bars_held": pl.Int64,
             "r_multiple": pl.Float64,
+            "n_legs": pl.Int64,
+            "exit_legs_json": pl.Utf8,
         },
         orient="row",
     )

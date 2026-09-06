@@ -12,4 +12,9 @@ duplicating it.
 - [2026-09-06-ema-tuning-and-smc-strategies.md](2026-09-06-ema-tuning-and-smc-strategies.md) --
   fix the 9/15 EMA strategy's measurement bugs, rebuild the tuning grid,
   add 5 Indian-market SMC/ICT strategies, and run a parallel search
-  campaign with a pre-registered promotion gate. In progress.
+  campaign with a pre-registered promotion gate. Done (rounds 1-3;
+  0 of 36 cells passed the gate -- no edge established).
+- [2026-09-06-ema-ha-pattern-scale-out.md](2026-09-06-ema-ha-pattern-scale-out.md) --
+  Heikin-Ashi doji/hammer pattern-gated EMA entry + a 50/25/25 scale-out
+  exit ladder, in the same pre-registered campaign. Done (0 of 6 cells
+  passed the gate -- no edge established).

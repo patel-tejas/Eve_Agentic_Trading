@@ -49,6 +49,7 @@ import polars as pl
 # this function runs. Verified: without this, every trial in a
 # multi-worker sweep errors with a KeyError on STRATEGY_REGISTRY.
 import quant.strategies.ema_9_15  # noqa: E402,F401
+import quant.strategies.ema_ha_pattern  # noqa: E402,F401
 import quant.strategies.ist_judas  # noqa: E402,F401
 import quant.strategies.orb_vwap  # noqa: E402,F401
 import quant.strategies.pdh_pdl_turtle_soup  # noqa: E402,F401
@@ -57,7 +58,7 @@ import quant.strategies.smc_sweep_fvg  # noqa: E402,F401
 from quant.backtest.costs import CostConfig, SlippageConfig
 from quant.backtest.engine import BacktestConfig, run_backtest
 from quant.backtest.execution import ExecutionConfig
-from quant.backtest.exits import ExitConfig
+from quant.backtest.exits import ExitConfig, ScaleLeg
 from quant.backtest.market import MarketContext
 from quant.backtest.metrics import daily_returns_by_date
 from quant.research.leaderboard import (
@@ -96,10 +97,27 @@ class Trial:
     costs: dict[str, Any] = field(default_factory=dict)  # CostConfig field overrides
     slippage: dict[str, Any] = field(default_factory=dict)  # SlippageConfig field overrides
     seed: int = 0
+    # Phase 11: position sizing for the scale-out ladder (a 50/25/25 split
+    # needs whole lots -- position_size=4 makes 2/1/1 exact). Threaded
+    # into ``BacktestConfig`` in ``run_trial``. ``initial_capital`` should
+    # scale with position_size (e.g. Rs 40L at 4 lots vs the Rs 10L
+    # baseline at 1 lot) so max_drawdown_pct stays comparable across a
+    # campaign that mixes position sizes; None keeps BacktestConfig's own
+    # default.
+    position_size: int = 1
+    initial_capital: float | None = None
 
     @property
     def param_hash(self) -> str:
-        market = {"lot_size": self.lot_size, "tick_size_rupees": self.tick_size_rupees}
+        # position_size is included: a 1-lot and a 4-lot config are NOT
+        # the same trial (different scale-out lot quantisation is
+        # possible at each), so they must not collide on the same hash
+        # and silently overwrite each other in the leaderboard.
+        market = {
+            "lot_size": self.lot_size,
+            "tick_size_rupees": self.tick_size_rupees,
+            "position_size": self.position_size,
+        }
         return trial_param_hash(self.strategy_id, self.params, self.exits, market)
 
     @property
@@ -201,12 +219,26 @@ def run_trial(trial: Trial) -> dict[str, Any]:
             lot_size=trial.lot_size,
             tick_size_rupees=trial.tick_size_rupees,
         )
-        bt_cfg = BacktestConfig(
+        exits_kwargs = dict(trial.exits)
+        scale_out_raw = exits_kwargs.pop("scale_out", None)
+        if scale_out_raw:
+            # Trial.exits is a plain, JSON-serialisable dict (it is
+            # pickled across the Windows spawn boundary and also written
+            # verbatim to the leaderboard as exits_json) -- scale_out
+            # legs travel as a list of {"at_r": ..., "fraction": ...}
+            # dicts and are rehydrated into ScaleLeg here, at the one
+            # place that actually needs the real dataclass.
+            exits_kwargs["scale_out"] = tuple(ScaleLeg(**leg) for leg in scale_out_raw)
+        bt_cfg_kwargs: dict[str, Any] = dict(
             market=market,
             costs=CostConfig(**trial.costs),
             execution=ExecutionConfig(slippage=SlippageConfig(**trial.slippage)),
-            exits=ExitConfig(**trial.exits),
+            exits=ExitConfig(**exits_kwargs),
+            position_size=trial.position_size,
         )
+        if trial.initial_capital is not None:
+            bt_cfg_kwargs["initial_capital"] = trial.initial_capital
+        bt_cfg = BacktestConfig(**bt_cfg_kwargs)
         result = run_backtest(frame, signals, bt_cfg)
         m = result.metrics
         trades = result.trades

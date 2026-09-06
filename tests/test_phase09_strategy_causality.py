@@ -19,6 +19,7 @@ import pytest
 # collection time) so this file's parametrization is deterministic
 # regardless of test collection/run order.
 import quant.strategies.ema_9_15  # noqa: F401
+import quant.strategies.ema_ha_pattern  # noqa: F401
 import quant.strategies.ist_judas  # noqa: F401
 import quant.strategies.orb_vwap  # noqa: F401
 import quant.strategies.pdh_pdl_turtle_soup  # noqa: F401

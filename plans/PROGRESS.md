@@ -1,7 +1,102 @@
 # Implementation progress log
 
-Running log for `plans/2026-09-06-ema-tuning-and-smc-strategies.md`.
-Newest entries at the top.
+Running log for `plans/2026-09-06-ema-tuning-and-smc-strategies.md` and
+`plans/2026-09-06-ema-ha-pattern-scale-out.md` (the HA-pattern-gated
+entry + scale-out ladder variant, requested after round 3). Newest
+entries at the top.
+
+---
+
+## 2026-09-07 -- HA-pattern-gated EMA entry + scale-out exit ladder ("ema_ha"), full campaign run
+
+Implemented per `plans/2026-09-06-ema-ha-pattern-scale-out.md`, entirely
+within the same pre-registered protocol/campaign (`C2026-09-EMA-SMC`) as
+rounds 1-3 -- a new family raises the deflated-Sharpe bar, it does not
+get a fresh one.
+
+**Phase 0 gate (run first, before any engine work):** measured the
+crossover-AND-HA-pattern base rate across 3 instruments x {5m, 15m} x a
+threshold matrix on the train split. 191 of 216 (symbol, tf, threshold)
+cells projected >= 100 train / >= 30 validation trades -- proceeded.
+
+**New indicator primitives** (`quant/indicators/heikin_ashi.py`,
+`quant/indicators/patterns.py`): Heikin Ashi transform (`ha_open`
+recursion built as an `ewm_mean(alpha=0.5, adjust=False)` over a
+one-bar-shifted `ha_close` series seeded at `(open[0]+close[0])/2` --
+proven algebraically identical to the textbook recursion via a
+hand-computed 5-bar fixture, not just self-consistent) and
+doji/hammer/inverted-hammer/small-range flags (`add_candle_shape`,
+prefix-parameterised so the same code runs on real OHLC or HA columns).
+Both proven causal via the `test_prefix_equals_full_frame` harness.
+8 new tests, `tests/test_phase11_causality.py`.
+
+**New strategy** `quant/strategies/ema_ha_pattern.py` (id `ema_ha`): 9/15
+EMA crossover gated on a qualifying HA pattern within `pattern_window_bars`
+of the cross; structural stop (`stop_mode="signal"`) at the anchor bar's
+REAL low/high (never the smoothed HA level) -- picked up automatically by
+the existing `tests/test_phase09_strategy_causality.py` parametrized
+suite once registered.
+
+**Engine surgery** (`quant/backtest/exits.py`, `quant/backtest/engine.py`):
+added `ScaleLeg`/`ExitConfig.scale_out` (partial exits sized in LOTS, not
+fractional contracts) and a `trail_mode="prev_candle_extreme"`. Every
+exit path (signal reversal, stop, target, trail, time, EOD,
+end-of-data) now funnels through one `_add_leg` + `_finalize_trade`
+mechanism that consolidates N legs into exactly ONE trades-frame row --
+critical because a naive one-row-per-leg design would silently triple
+`total_trades`, distort `profit_factor`, satisfy the pre-registered
+`MIN_TRADES` gate on leg-inflation alone, and break the bootstrap/
+permutation significance tests (legs of one trade are not exchangeable
+observations). `ExitConfig(scale_out=())` is proven byte-for-bit
+identical to the pre-Phase-11 engine by construction (a single leg's
+cost/gross formula reduces exactly to the old `round_trip_costs`), not
+merely asserted -- the entire pre-existing `test_phase05_backtest.py`/
+`test_phase09_exits.py` suites (62 tests) pass unmodified against the
+rewritten engine. 10 new tests in `tests/test_phase11_scale_out.py`,
+including a manually mutation-tested guard on the `prev_candle_extreme`
+trail's `i-1`-only causality (confirmed the test fails when the bug is
+deliberately reintroduced, then reverted).
+
+**Sampling/dedup**: `quant/research/sampling.py` gained `canonical_exits`
+(quantises scale-leg fractions to actual lot counts before hashing --
+0.30 and 0.33 both floor to 1 lot at 4 lots and must not count as
+distinct trials) and an `ema_ha` branch in `canonical_params`.
+`quant/research/sweep.py`'s `Trial` gained `position_size`/
+`initial_capital` (included in `param_hash`'s market dict, so a 1-lot
+and a 4-lot config never collide). 7 new tests,
+`tests/test_phase11_sampling.py`.
+
+**Campaign** (`scripts/run_round4.py`, rounds 5-8 of `C2026-09-EMA-SMC`,
+position_size=4 lots / initial_capital=Rs 40L so 50%/25%/25% lands on
+exact 2/1/1 lots and maxDD% stays comparable to the 1-lot campaign):
+
+| Stage | Split | Trials | Wall |
+|---|---|---|---|
+| 1 -- entry logic (fixed 1R/2R/25% ladder) | train | 19,440 | 650s |
+| 2 -- ladder + structural-stop LHS (n=128) x top-6 entries/cell | train | 4,536 | 158s |
+| 3 -- local refinement (+/-1 grid step) | train | 208 | 16s |
+| validation -- each cell's Stage-3 winner, scored ONCE | val (2025) | 6 | 2s |
+
+0 errors across all 24,190 trials. Cumulative campaign trial count after
+this round: **19,714** distinct param hashes (the `n_trials` the
+deflated Sharpe ratio is penalized against).
+
+**Result** (`data/results/leaderboard/C2026-09-EMA-SMC/EMA_HA_REPORT.md`):
+4 of 6 cells flip negative on validation despite strong (PF 1.35-1.7,
+positive on 5/6 cells) train-split numbers -- the familiar overfitting
+signature. The 2 cells that stay positive (BANKNIFTY 5m: +Rs242,841, PF
+1.92, 72 trades; SENSEX 5m: +Rs89,738, PF 1.43, 196 trades) pass every
+raw P&L/PF/drawdown/artifact check but **both fail the statistical gate**
+on deflated Sharpe (DSR ~1e-5 to 0.12, nowhere near the 0.95 bar once
+penalized against 19,714 cumulative trials) and bootstrap CI (both
+include zero, e.g. BANKNIFTY 5m: [-0.71, 3.01]). **Verdict: 0 of 6 pass.
+No edge established for the HA-pattern-gated entry either** -- the same
+honest, pre-registered outcome as rounds 1-3, now with the added
+statistical headwind of a larger cumulative trial count. TEST split
+(2026) remains sealed and untouched.
+
+**State: 315 tests passing (up from 288), ruff clean.** Same 4
+pre-existing failures as before (unrelated to this work).
 
 ---
 

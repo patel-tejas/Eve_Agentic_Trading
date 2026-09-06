@@ -1,9 +1,14 @@
 # Fine-tune the EMA strategy, rebuild the tuning space, add 5 Indian-market SMC/ICT strategies, and run a parallel search campaign
 
-> **Status (2026-09-06):** Phases 1-3 implemented and verified (units/exits,
-> multi-instrument data backfill, ATR-normalized EMA). See
-> `plans/PROGRESS.md` for the running implementation log. Phases 4-9
-> in progress.
+> **Status: done (2026-09-06).** All phases implemented; the 3-round
+> campaign (rounds 1-3, ~8,750 trials) ran to completion. Verdict: 0 of
+> 36 (strategy, symbol, timeframe) cells passed the statistical gate on
+> the validation split -- no edge established, honestly, per the
+> pre-registered protocol. See `plans/PROGRESS.md` for the running
+> implementation log and `data/results/leaderboard/C2026-09-EMA-SMC/
+> FINAL_REPORT.md` for the full results table. Follow-up work (a
+> Heikin-Ashi pattern-gated entry + scale-out ladder, same campaign) is
+> tracked in `plans/2026-09-06-ema-ha-pattern-scale-out.md`.
 
 ## Context
 
