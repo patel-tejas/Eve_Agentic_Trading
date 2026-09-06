@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import time
 from datetime import date, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
@@ -86,15 +87,29 @@ def _epoch_ms_to_date(epoch_ms: Any) -> date:
 class UpstoxClient:
     """Minimal read-only Upstox API client for market data."""
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, *, require_auth: bool = True) -> None:
+        """``require_auth=False`` skips the credential check and omits the
+        Authorization header -- verified live: the v3 historical-candle
+        endpoint serves NSE/BSE INDEX candles (``NSE_INDEX|...``,
+        ``BSE_INDEX|...``) unauthenticated. Expired-contract endpoints and
+        anything beyond public index/instrument-master data still need a
+        real token; this only widens what an unauthenticated client CAN
+        call, it does not grant access to anything that actually requires
+        auth (those calls will simply fail with 401/403).
+        """
         self.settings = settings or get_settings()
-        self.settings.require_upstox_credentials()
+        self.require_auth = require_auth
+        headers = {"Accept": "application/json"}
+        if require_auth:
+            self.settings.require_upstox_credentials()
+            headers["Authorization"] = f"Bearer {self.settings.upstox_analytics_token}"
+        elif self.settings.upstox_analytics_token:
+            # Use it if present -- no harm, and some endpoints behave better
+            # authenticated even when not strictly required.
+            headers["Authorization"] = f"Bearer {self.settings.upstox_analytics_token}"
         self._http = httpx.Client(
             base_url=UPSTOX_BASE_URL,
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.settings.upstox_analytics_token}",
-            },
+            headers=headers,
             timeout=120.0,
         )
 
@@ -261,8 +276,26 @@ class UpstoxClient:
     # HTTP plumbing
     ###
 
-    def _get(self, url: str) -> dict[str, Any]:
-        response = self._http.get(url)
-        if response.status_code >= 400:
+    def _get(self, url: str, *, max_retries: int = 3) -> dict[str, Any]:
+        """GET with bounded retry + exponential backoff on 429/5xx.
+
+        The client previously had no rate-limit or retry handling at all --
+        a single 429 or transient 5xx failed the whole request. Only
+        429/500-599 are retried (a 4xx client error like a bad instrument
+        key will not become valid on retry).
+        """
+        last_error: UpstoxError | None = None
+        for attempt in range(max_retries + 1):
+            response = self._http.get(url)
+            if response.status_code < 400:
+                return response.json()
+            if response.status_code == 429 or response.status_code >= 500:
+                last_error = UpstoxError(
+                    f"Request failed: {response.status_code} {response.text[:500]}"
+                )
+                if attempt < max_retries:
+                    time.sleep(0.5 * (2**attempt))
+                    continue
+                raise last_error
             raise UpstoxError(f"Request failed: {response.status_code} {response.text[:500]}")
-        return response.json()
+        raise last_error  # pragma: no cover -- loop always returns or raises above

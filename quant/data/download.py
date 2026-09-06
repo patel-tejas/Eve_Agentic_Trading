@@ -167,6 +167,22 @@ def download_nifty_futures_upstox(
     )
     frame = normalize_candles(candles, contract).sort("timestamp")
 
+    if frame.height == 0:
+        # Phase 09: this used to write an empty parquet + plausible-looking
+        # metadata silently (the cause of the three 0-row data/raw/futures/
+        # 2026-{01,02,03} placeholders -- a historical month resolved to a
+        # currently-active contract, asked V3 for candles outside its ~1
+        # month window, got [] back, and nothing checked). Fail loudly
+        # instead of writing a file that looks like real data.
+        raise RuntimeError(
+            f"Upstox returned 0 candles for {year}-{month:02d} "
+            f"(contract {contract.trading_symbol}, key {record['instrument_key']}). "
+            "V3 historical-candle only serves ~1 month of 1-minute history "
+            "leading up to to_date; this month is likely outside that "
+            "window for the resolved (currently-active) contract. Refusing "
+            "to write an empty parquet."
+        )
+
     parquet_path = month_dir / "candles_1m.parquet"
     frame.write_parquet(parquet_path)
     metadata_path = month_dir / "contract_metadata.json"

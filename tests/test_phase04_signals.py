@@ -54,6 +54,9 @@ def test_output_schema_and_determinism():
         "ema_slow",
         "angle",
         "candle_close",
+        # Phase 09: trailing column, null under the default
+        # angle_mode="fixed_scale" -- see tests/test_phase09_angle.py.
+        "slope_atr",
     ]
     assert out1.height == 120
     assert set(out1["signal_type"].unique().to_list()) <= {"BUY", "SELL", "HOLD"}

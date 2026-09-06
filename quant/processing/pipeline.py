@@ -19,6 +19,7 @@ from pathlib import Path
 import polars as pl
 
 from quant.candles.aggregation import aggregate_candles
+from quant.candles.session import filter_session
 from quant.candles.verify import verify_aggregation
 from quant.indicators.angle import add_ema_angle
 from quant.indicators.ema import add_ema
@@ -134,6 +135,101 @@ def process_month(
             pl.read_parquet(out_dir / "candles.parquet"),
             tf,
             name=f"NIFTY_FUT_{year:04d}-{month:02d}_{tf}m",
+        )
+        (out_dir / "verification_report.json").write_text(
+            json.dumps(vreport, indent=2), encoding="utf-8"
+        )
+        verification[f"{tf}m"] = vreport["overall"]
+
+    return {
+        **results,
+        "validation": report.overall_status,
+        "verification": verification,
+    }
+
+
+def process_index_month(
+    *,
+    symbol: str,
+    year: int,
+    month: int,
+    raw_root: str | Path = "data/raw/index",
+    processed_root: str | Path = "data/processed/index",
+    timeframes: tuple[int, ...] = DEFAULT_TIMEFRAMES,
+    ema_periods: tuple[int, ...] = DEFAULT_EMA_PERIODS,
+    angle_lookback: int = 1,
+    angle_scale: float = 1000.0,
+) -> dict[str, object]:
+    """Process one harvest month of INDEX SPOT data (Phase 09).
+
+    Mirrors ``process_month`` but for the index-spot schema (no
+    ``security_id``/``exchange``/``instrument_type``/``expiry`` columns --
+    see ``quant.data.index_spot.normalize_index_candles``) and under
+    ``data/{raw,processed}/index/<SYMBOL>/<YYYY-MM>/``. ``volume == 0`` is
+    expected here (an index has no traded volume) and only ever produces
+    a ``warn``, never a ``fail``, in ``validate_dataset``.
+
+    Applies ``filter_session`` before aggregation so day-boundary noise
+    (a stray bar outside 09:15-15:29) can never leak into a 5m/15m
+    candle's aggregation window.
+    """
+    raw_root = Path(raw_root)
+    processed_root = Path(processed_root)
+    month_dir = raw_root / symbol / f"{year:04d}-{month:02d}"
+    candles_path = month_dir / "candles_1m.parquet"
+    if not candles_path.exists():
+        raise FileNotFoundError(f"Missing raw dataset: {candles_path}")
+
+    from quant.data.validation import validate_dataset
+
+    raw = pl.read_parquet(candles_path).sort("timestamp")
+    raw = filter_session(raw)
+    report = validate_dataset(raw, f"{symbol}_{year:04d}-{month:02d}_1m", interval_minutes=1)
+    report.save(month_dir / "validation_report.json")
+    if report.overall_status == "fail":
+        raise RuntimeError(
+            f"Validation failed for {symbol} {year:04d}-{month:02d}: {report.errors}"
+        )
+
+    processed_month = processed_root / symbol / f"{year:04d}-{month:02d}"
+    results: dict[str, object] = {}
+    for tf in timeframes:
+        frame = raw if tf == 1 else aggregate_candles(raw, tf)
+        frame = add_indicators(
+            frame, ema_periods=ema_periods, angle_lookback=angle_lookback, angle_scale=angle_scale
+        )
+        out_dir = processed_month / f"{tf}m"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "candles.parquet"
+        frame.write_parquet(out_path)
+        metadata = {
+            "dataset": f"{symbol}_INDEX_{year:04d}-{month:02d}_{tf}m",
+            "source": str(candles_path),
+            "price_source": "index_spot_proxy",
+            "parent_timeframe": "1m" if tf == 1 else "1m-resampled",
+            "timeframe_minutes": tf,
+            "bars": frame.height,
+            "indicators": {
+                "ema_periods": list(ema_periods),
+                "angle": {"lookback": angle_lookback, "scale": angle_scale},
+            },
+            "price_cols": ["open", "high", "low", "close", "volume", "open_interest"],
+        }
+        (out_dir / "dataset_metadata.json").write_text(
+            json.dumps(metadata, indent=2), encoding="utf-8"
+        )
+        results[f"{tf}m"] = {"path": str(out_path), "bars": frame.height}
+
+    verification: dict[str, dict[str, object]] = {}
+    for tf in timeframes:
+        if tf == 1:
+            continue
+        out_dir = processed_month / f"{tf}m"
+        vreport = verify_aggregation(
+            raw,
+            pl.read_parquet(out_dir / "candles.parquet"),
+            tf,
+            name=f"{symbol}_INDEX_{year:04d}-{month:02d}_{tf}m",
         )
         (out_dir / "verification_report.json").write_text(
             json.dumps(vreport, indent=2), encoding="utf-8"

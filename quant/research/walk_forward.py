@@ -34,12 +34,10 @@ from datetime import datetime, timedelta
 import polars as pl
 
 from quant.backtest.engine import BacktestConfig
-from quant.research.parameter_search import evaluate_params, parameter_grid_search
+from quant.research.parameter_search import DEFAULT_GRID, evaluate_params, parameter_grid_search
 
 TEST_WINDOW_DAYS = 5
 DEFAULT_EMBARGO_DAYS = 1
-
-_PARAM_COLUMNS = {"fast_ema", "slow_ema", "angle_threshold", "angle_lookback"}
 
 
 @dataclass(frozen=True)
@@ -159,12 +157,20 @@ def _calibrate(
     grid: dict[str, tuple[int | float, ...]] | None,
     cfg: BacktestConfig,
 ) -> tuple[dict[str, int | float], float]:
-    """Grid-search the training window; return (best params, train net P&L)."""
+    """Grid-search the training window; return (best params, train net P&L).
+
+    Param columns are derived from ``grid`` itself (falling back to
+    ``DEFAULT_GRID``) rather than a hardcoded set -- a hardcoded
+    ``_PARAM_COLUMNS`` would ``KeyError`` the moment any new grid (e.g.
+    the Phase 09 staged EMA/exit grids) introduced a parameter name it
+    didn't already know about.
+    """
     start, end = window
     train = candles.filter(
         (pl.col("timestamp") >= start) & (pl.col("timestamp") < end)
     )
     results = parameter_grid_search(train, backtest_config=cfg, grid=grid)
     best = results.head(1).to_dicts()[0]
-    params = {name: best[name] for name in _PARAM_COLUMNS}
+    param_columns = (grid or DEFAULT_GRID).keys()
+    params = {name: best[name] for name in param_columns}
     return params, float(best["net_pnl"])

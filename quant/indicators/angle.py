@@ -51,3 +51,47 @@ def add_ema_angle(
     return frame.with_columns(
         ema_angle_expr(ema_column, lookback=lookback, scale=scale).alias(column)
     )
+
+
+def ema_slope_atr_expr(
+    ema_column: str,
+    atr_column: str = "atr",
+    *,
+    lookback: int = 1,
+) -> pl.Expr:
+    """ATR-normalized EMA slope: ``(EMA[t] - EMA[t-k]) / (k * ATR[t])``.
+
+    Phase 09: the fixed-scale ``ema_angle_expr`` above (``angle_scale``
+    frozen at 1000) makes a nominal threshold mean wildly different things
+    on different timeframes and lookbacks -- measured on real July 2026
+    NIFTY data, a 30-degree threshold passes 0.55% of 1m/lookback=1 bars
+    but 72.06% of 15m/lookback=5 bars (a 131x difference in selectivity
+    for the "same" filter). Dividing by ``k * ATR`` instead of a fixed
+    constant makes the resulting quantity a slope in VOLATILITY units,
+    which is close to invariant across timeframe, lookback, and regime --
+    measured p50/p70/p85/p95 of ``|slope|`` on 1m/5m/15m July data differ
+    by only a few percent of each other, unlike the degree measure's
+    131x spread. Dividing by ``k`` specifically is what decouples the
+    threshold from ``lookback``: without it, a longer lookback would
+    still inflate the raw numerator even after ATR-normalizing.
+
+    Units: ATR per bar. A value of ``0.20`` means the EMA moved 0.20x an
+    average true range over the lookback window, per bar.
+    """
+    prev = pl.col(ema_column).shift(lookback)
+    return (pl.col(ema_column) - prev) / (lookback * pl.col(atr_column))
+
+
+def add_ema_slope_atr(
+    frame: pl.DataFrame,
+    ema_column: str,
+    *,
+    atr_column: str = "atr",
+    name: str | None = None,
+    lookback: int = 1,
+) -> pl.DataFrame:
+    """Return ``frame`` with the ATR-normalized EMA slope column attached."""
+    column = name or f"{ema_column}_slope_atr"
+    return frame.with_columns(
+        ema_slope_atr_expr(ema_column, atr_column, lookback=lookback).alias(column)
+    )
