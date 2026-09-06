@@ -22,6 +22,15 @@ import { useEffect, useRef, useState } from "react";
 // manifest can arrive as either a static or a dynamic tool part.
 type AnyToolPart = ToolUIPart | DynamicToolUIPart;
 
+type GroundingReport = {
+  grounded: boolean;
+  total_claims: number;
+  grounded_claims: number;
+  ungrounded_claims: number;
+  summary: string;
+  ungrounded: { text: string; line: number; context: string }[];
+};
+
 type Status = {
   bridge: { url: string; ok: boolean; tools?: number; error?: string };
   model: {
@@ -45,6 +54,7 @@ export default function Home() {
   const [status, setStatus] = useState<Status | null>(null);
   const [input, setInput] = useState("");
   const { messages, sendMessage, status: chatStatus, error, stop } = useChat();
+  const [grounding, setGrounding] = useState<Record<string, GroundingReport>>({});
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const busy = chatStatus === "submitted" || chatStatus === "streaming";
@@ -62,6 +72,44 @@ export default function Home() {
       behavior: "smooth",
     });
   }, [messages]);
+
+  // Check the finished answer's numbers against the tool results it was built
+  // from. Runs once per assistant message, only after streaming settles, so a
+  // half-written number is never judged.
+  useEffect(() => {
+    if (chatStatus !== "ready") return;
+    const last = messages[messages.length - 1];
+    if (!last || last.role !== "assistant" || grounding[last.id]) return;
+
+    const answer = last.parts
+      .filter((p) => p.type === "text")
+      .map((p) => (p as { text: string }).text)
+      .join("\n");
+    if (!answer.trim()) return;
+
+    const toolResults = last.parts
+      .filter((p) => isToolUIPart(p) && p.state === "output-available")
+      .map((p) => (p as { output: unknown }).output);
+
+    let cancelled = false;
+    fetch("/api/grounding", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ answer, toolResults }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((report: GroundingReport | null) => {
+        if (!cancelled && report && "grounded" in report) {
+          setGrounding((prev) => ({ ...prev, [last.id]: report }));
+        }
+      })
+      .catch(() => {
+        // Advisory only: a failed check must never break the conversation.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [messages, chatStatus, grounding]);
 
   function submit(text: string) {
     const trimmed = text.trim();
@@ -148,7 +196,11 @@ export default function Home() {
                 />
               )}
               {messages.map((message) => (
-                <Message key={message.id} message={message} />
+                <Message
+                  key={message.id}
+                  message={message}
+                  grounding={grounding[message.id]}
+                />
               ))}
               {chatStatus === "submitted" && (
                 <div className="text-xs text-zinc-500">Thinking…</div>
@@ -293,7 +345,13 @@ function EmptyState({
   );
 }
 
-function Message({ message }: { message: UIMessage }) {
+function Message({
+  message,
+  grounding,
+}: {
+  message: UIMessage;
+  grounding?: GroundingReport;
+}) {
   const isUser = message.role === "user";
   return (
     <div className={isUser ? "flex justify-end" : "flex justify-start"}>
@@ -321,9 +379,50 @@ function Message({ message }: { message: UIMessage }) {
             }
             return null;
           })}
+          {!isUser && grounding && <GroundingBadge report={grounding} />}
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Whether the numbers in this answer trace to the tool results above it.
+ *
+ * Advisory: it reports, it does not block. The system prompt tells the model
+ * never to compute a figure itself; this is what checks that it didn't.
+ */
+function GroundingBadge({ report }: { report: GroundingReport }) {
+  if (report.total_claims === 0) return null;
+
+  if (report.grounded) {
+    return (
+      <div
+        title={report.summary}
+        className="flex items-center gap-1.5 text-[11px] text-emerald-700 dark:text-emerald-400"
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+        {report.total_claims} figures traced to tool results
+      </div>
+    );
+  }
+
+  return (
+    <details className="rounded-md border border-amber-300 bg-amber-50 text-[11px] text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+      <summary className="flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+        {report.ungrounded_claims} of {report.total_claims} figures do not trace
+        to a tool result
+      </summary>
+      <ul className="space-y-1 border-t border-amber-300 px-2.5 py-1.5 dark:border-amber-900">
+        {report.ungrounded.map((claim, i) => (
+          <li key={i}>
+            <span className="font-mono font-medium">{claim.text}</span>
+            <span className="opacity-70"> — line {claim.line}: {claim.context}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
   );
 }
 

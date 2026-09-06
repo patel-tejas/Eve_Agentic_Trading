@@ -43,6 +43,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from mcp.quant_server.grounding import check_grounding
 from mcp.quant_server.server import _TOOL_FUNCTIONS
 
 DEFAULT_PORT = 8010
@@ -203,6 +204,33 @@ async def call_tool(request: Request) -> JSONResponse:
     return JSONResponse(payload)
 
 
+async def grounding_check(request: Request) -> JSONResponse:
+    """Report which numeric claims in an answer trace to this run's tool results.
+
+    Deliberately NOT a member of ``_TOOL_FUNCTIONS``: it is absent from
+    ``/tools``, so the model is never offered the ability to call its own
+    grader. The chat route invokes it after a turn completes.
+
+    Body: ``{"answer": str, "tool_results": any}``.
+    """
+    try:
+        raw = await request.body()
+        body = json.loads(raw) if raw.strip() else {}
+    except json.JSONDecodeError as exc:
+        return JSONResponse({"error": f"invalid JSON body: {exc}"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+
+    answer = body.get("answer")
+    if not isinstance(answer, str):
+        return JSONResponse(
+            {"error": "'answer' must be a string"}, status_code=400
+        )
+
+    report = check_grounding(answer, body.get("tool_results", []))
+    return JSONResponse({**report.to_dict(), "summary": report.summary()})
+
+
 def build_app(*, allow_origins: list[str] | None = None) -> Starlette:
     """The Starlette app. CORS is open to localhost dev origins by default."""
     origins = allow_origins or ["http://localhost:3000", "http://127.0.0.1:3000"]
@@ -211,6 +239,7 @@ def build_app(*, allow_origins: list[str] | None = None) -> Starlette:
             Route("/health", health, methods=["GET"]),
             Route("/tools", list_tools, methods=["GET"]),
             Route("/tools/{name}", call_tool, methods=["POST"]),
+            Route("/grounding/check", grounding_check, methods=["POST"]),
         ],
         middleware=[
             Middleware(

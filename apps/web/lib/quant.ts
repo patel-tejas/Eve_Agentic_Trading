@@ -122,3 +122,43 @@ export function buildTools(manifest: ToolManifestEntry[]): ToolSet {
  * the case where an operator has deliberately enabled them.
  */
 export const WRITE_TOOLS = ["download_month_data", "process_month_data"] as const;
+
+/** Verdict from the bridge's numeric grounding check. */
+export type GroundingReport = {
+  grounded: boolean;
+  total_claims: number;
+  grounded_claims: number;
+  ungrounded_claims: number;
+  evidence_values: number;
+  answer_sha256: string;
+  summary: string;
+  ungrounded: {
+    value: number;
+    text: string;
+    line: number;
+    context: string;
+  }[];
+};
+
+/**
+ * Ask the bridge which numeric claims in `answer` trace to `toolResults`.
+ *
+ * Advisory. It reports; it does not block or rewrite an answer. Note this is
+ * NOT one of the model's tools -- it lives on its own bridge route precisely
+ * so the model cannot call its own grader and tune an answer to pass.
+ */
+export async function checkGrounding(
+  answer: string,
+  toolResults: unknown[],
+): Promise<GroundingReport> {
+  const res = await fetch(`${BRIDGE_URL}/grounding/check`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ answer, tool_results: toolResults }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    throw new Error(`grounding check returned ${res.status}`);
+  }
+  return (await res.json()) as GroundingReport;
+}
