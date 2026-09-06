@@ -77,7 +77,7 @@ def gate_one_candidate(row: dict, *, n_trials: int, iterations: int, seed: int) 
 
         bootstrap = bootstrap_sharpe_ci(returns, iterations=iterations, seed=seed)
         checks["bootstrap_excludes_zero"] = bootstrap.excludes_zero
-        result["bootstrap_ci"] = [bootstrap.ci_lower, bootstrap.ci_upper]
+        result["bootstrap_ci"] = [bootstrap.lower, bootstrap.upper]
     else:
         checks["deflated_sharpe"] = False
         checks["bootstrap_excludes_zero"] = False

@@ -296,7 +296,24 @@ def run_sweep(
     Returns a summary dict, not the leaderboard itself -- call
     ``quant.research.leaderboard.load_leaderboard`` for that.
     """
-    os.environ["POLARS_MAX_THREADS"] = "1"  # MUST be set before the pool is created
+    # MUST be set before the pool is created. POLARS_MAX_THREADS alone is
+    # not enough: numpy's BLAS backend (OpenBLAS here, used by
+    # quant.research.sampling's np.random and the _stats/significance/
+    # multiple_testing modules) has its OWN thread pool, independent of
+    # Polars'. Confirmed the hard way -- a real round-2 run with 14
+    # workers on this 16-core machine hit
+    # "OpenBLAS error: Memory allocation still failed after 10 retries,
+    # giving up" and crashed the whole pool (BrokenProcessPool) minutes
+    # in, well past what any small smoke test would have caught. 14
+    # processes x OpenBLAS's own default (often all-core) thread pool
+    # each is the same oversubscription problem as the Polars one, just
+    # in a different library, and it fails much less gracefully (a
+    # process abort, not just slowness).
+    os.environ["POLARS_MAX_THREADS"] = "1"
+    os.environ["OPENBLAS_NUM_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "1"
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
     seen_ids: set[str] = set()
     deduped: list[Trial] = []

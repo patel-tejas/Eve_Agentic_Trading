@@ -5,6 +5,74 @@ Newest entries at the top.
 
 ---
 
+## 2026-09-06 -- Round 2 complete: no candidate survives validation. Honest, gated verdict.
+
+`scripts/run_round2.py` (new): stage 2a (EMA exit tuning -- top-6 distinct
+15m entries per instrument from round 1, crossed with an LHS(128) sample
+of `STAGE2_EXIT_GRID`, on TRAIN) + stage 2b (score round 2a's best EMA
+config AND round 1's top-5-per-cell SMC configs ONCE on the untouched
+2025 VALIDATION year). 2,304 + 153 = 2,457 trials, 0 errors, 55s wall.
+
+**A second real multiprocessing bug found only by running the actual
+campaign at scale:** `OpenBLAS error: Memory allocation still failed
+after 10 retries, giving up`, crashing the whole pool
+(`BrokenProcessPool`) partway through stage 2a. `POLARS_MAX_THREADS=1`
+was not enough -- numpy's OpenBLAS backend (used by
+`quant.research.sampling`'s RNG and the `_stats`/`significance`/
+`multiple_testing` modules) has its own, independent thread pool. 14
+worker processes x OpenBLAS's own default all-core thread pool each is
+the same oversubscription problem in a different library, and it fails
+by crashing rather than merely running slow. Fixed: `sweep.py` now also
+sets `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS`, `MKL_NUM_THREADS`,
+`NUMEXPR_NUM_THREADS` to `"1"` in the parent before the pool is created.
+Regression test updated (`test_single_threaded_env_vars_set_by_run_sweep`).
+Retried clean after the fix: 0 errors.
+
+### The result, honestly
+
+**Every round-1 "winner" that looked promising in-sample FAILED to hold
+up against the untouched 2025 validation year.** Most strikingly:
+`pdh_pdl_turtle_soup` on BANKNIFTY -- round 1's standout, 100% of 72
+combos net-positive, PF 1.4-1.7, a checked plateau not a spike -- turns
+**net-NEGATIVE on validation** (best combo: -Rs 30,617, PF 1.06; worst
+of the carried-forward set: -Rs 61,393, PF 0.98). The exit-tuned EMA
+(BANKNIFTY 15m) comes back roughly flat (-Rs 1,909, PF 1.22, Sharpe
+~0.01); NIFTY and SENSEX EMA configs produced too few trades on one
+validation year to even clear `MIN_TRADES["train"]=100` and could not
+be assessed. A handful of SMC cells (smc_sweep_fvg, smc_ob_choch,
+ist_judas on BANKNIFTY/NIFTY 5m) came back nominally positive but on
+only 1-2 surviving configs per cell -- the automated plateau-vs-spike
+check correctly flagged the best of these
+(`smc_sweep_fvg`/BANKNIFTY/5m) as a **possible isolated spike**, not a
+supported result.
+
+**Ran the formal promotion gate (`scripts/promote_candidate.py --split
+val`) against the top 15 validation-split candidates. Verdict: 0 of 15
+pass.** Every one fails both deflated Sharpe (survival at 95%) and the
+bootstrap Sharpe CI (excludes zero), correctly penalized against the
+campaign's cumulative 5,259 distinct trials -- not just this round's.
+This did not require unsealing the TEST split (2026 data): the gate ran
+against `split="val"`, and `--split test` remains blocked by the seal
+mechanism (`quant.research.protocol.unseal_test`) until there is a
+reason to open it.
+
+**This is the legitimate, pre-registered outcome the plan explicitly
+built for** ("edge found and gated, OR no edge established, here is the
+evidence and which gate each candidate failed") -- not a bug, and not a
+failure of the campaign. If anything it is a positive result for the
+*methodology*: the train/validation split and the plateau-vs-spike
+check caught an overfit result (Turtle Soup) before the statistical
+gate would have had to. The TEST split has not been touched and remains
+sealed.
+
+**Not done / open decision:** whether to spend a round 3 on materially
+different ranges (different strategy families, wider entry windows, or
+switching the confirmation leg to the real futures data instead of the
+index-spot proxy) or to close the campaign here with "no edge
+established on this protocol" as the final, honestly-reported result.
+
+---
+
 ## 2026-09-06 -- Round 1 sweep launched (real data, discovery train split)
 
 `scripts/run_round1.py` (new) + `scripts/analyze_round.py` (new,

@@ -147,12 +147,24 @@ def test_cumulative_trial_count_is_distinct_param_hash_across_rounds(tmp_path, c
     assert cumulative_trial_count("TEST-SWEEP", root=root) == 1
 
 
-def test_polars_max_threads_set_by_run_sweep(tmp_path, candles_path):
-    # Sentinel: ensure the env var is actually set before the pool starts.
-    os.environ.pop("POLARS_MAX_THREADS", None)
+def test_single_threaded_env_vars_set_by_run_sweep(tmp_path, candles_path):
+    """POLARS_MAX_THREADS alone is not enough -- a real round-2 run with
+    14 workers hit "OpenBLAS error: Memory allocation still failed"
+    and crashed the whole pool (BrokenProcessPool) before this fix, since
+    numpy's BLAS backend has its own, independent thread pool."""
+    env_vars = (
+        "POLARS_MAX_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    )
+    for var in env_vars:
+        os.environ.pop(var, None)
     trials = [_trial(candles_path, revert_bars=1)]
     run_sweep(trials, campaign_id="TEST-SWEEP", round_no=1, workers=1, root=str(tmp_path / "lb"))
-    assert os.environ.get("POLARS_MAX_THREADS") == "1"
+    for var in env_vars:
+        assert os.environ.get(var) == "1", f"{var} was not set before the pool was created"
 
 
 def test_error_in_one_trial_does_not_kill_the_sweep(tmp_path, candles_path):
