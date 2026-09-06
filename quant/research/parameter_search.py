@@ -11,13 +11,14 @@ Windows are half-open ``[start, end)`` so day slices align cleanly.
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from datetime import datetime, timedelta
 
 import polars as pl
 
 from quant.backtest.engine import BacktestConfig, run_backtest
+from quant.backtest.exits import ExitConfig
 from quant.backtest.metrics import daily_returns_by_date
 from quant.strategies.ema_9_15 import StrategyConfig, generate_signals
 
@@ -26,6 +27,57 @@ DEFAULT_GRID: dict[str, tuple[int | float, ...]] = {
     "slow_ema": (15, 18, 21, 25),
     "angle_threshold": (20.0, 25.0, 30.0, 35.0, 40.0),
     "angle_lookback": (1, 2, 3, 5),
+}
+
+# Phase 09: the new tuning space. DEFAULT_GRID above is FROZEN (its 320
+# combinations are asserted by tests/test_phase08_research.py) -- these
+# are separate constants, not a replacement.
+#
+# STAGE1_EMA_GRID -- entry logic, full cartesian (cheap, ~575 valid
+# combos after canonical de-dup via quant.research.sampling). Keeps
+# fast_ema=9/slow_ema=15 so the incumbent is ranked inside its own grid,
+# and adds ATR-normalized slope gating (see quant.indicators.angle) as
+# the only mode swept -- the fixed-scale formula's selectivity varies
+# 131x across timeframe/lookback and is not worth re-searching.
+STAGE1_EMA_GRID: dict[str, tuple[object, ...]] = {
+    "fast_ema": (5, 8, 9, 13, 21),
+    "slow_ema": (15, 21, 34, 55, 89),
+    "angle_mode": ("atr_normalized",),
+    "slope_threshold_atr": (0.0, 0.10, 0.20, 0.30, 0.45),
+    "angle_lookback": (1, 3, 5),
+    "signal_mode": ("crossover_and_angle", "crossover_angle_and_trend"),
+}
+
+# STAGE2_EXIT_GRID -- bracket exits, LHS-sampled (full cartesian is 7,680;
+# top-K stage-1 winners x LHS(n=128) = 768 trials instead). Needs
+# quant.backtest.exits.ExitConfig fields, not StrategyConfig fields --
+# callers combine a Stage 1 params dict with one of these separately.
+STAGE2_EXIT_GRID: dict[str, tuple[object, ...]] = {
+    "stop_mode": ("atr",),
+    "stop_atr_mult": (0.75, 1.0, 1.5, 2.0, 3.0),
+    "target_mode": ("none", "r_multiple"),
+    "target_r_multiple": (1.0, 1.5, 2.0, 3.0),
+    "trail_mode": ("none", "atr", "breakeven_then_atr"),
+    "trail_atr_mult": (1.5, 2.5),
+    "time_stop_bars": (0, 12, 30, 75),
+    "session_start": ("09:15", "09:30"),
+    "session_end": ("14:45", "15:10"),
+    "eod_squareoff": ("15:15",),  # 15:15, not 15:20 -- see exits.py docstring
+}
+
+# Stage 3 (local refinement) varies only these numeric axes of
+# STAGE2_EXIT_GRID -- "+/-1 grid step on the numeric axes around the
+# Stage-2 winner", per the implementation plan. Pass THIS to
+# quant.research.sampling.local_refinement, not the full
+# STAGE2_EXIT_GRID: the categorical fields (stop_mode, target_mode,
+# trail_mode, session_start/end, eod_squareoff) stay fixed at the
+# Stage-2 winner's values, giving <= 3**4 = 81 combos (fewer once edge
+# values clip), not the 3**8-ish blow-up varying every field would cause.
+STAGE3_NUMERIC_AXES: dict[str, tuple[object, ...]] = {
+    "stop_atr_mult": STAGE2_EXIT_GRID["stop_atr_mult"],
+    "target_r_multiple": STAGE2_EXIT_GRID["target_r_multiple"],
+    "trail_atr_mult": STAGE2_EXIT_GRID["trail_atr_mult"],
+    "time_stop_bars": STAGE2_EXIT_GRID["time_stop_bars"],
 }
 
 GRID_METRICS = (
@@ -76,10 +128,18 @@ def evaluate_params(
     *,
     window: tuple[datetime, datetime] | None = None,
     backtest_config: BacktestConfig | None = None,
+    exit_params: dict[str, object] | None = None,
 ) -> GridResult:
     """Signals + backtest for one parameter set, optionally inside a window.
 
     ``window`` is half-open: bars with ``start <= timestamp < end``.
+
+    ``exit_params`` (Phase 09) -- an ``ExitConfig`` field dict (Stage 2 of
+    the staged search) -- is layered onto ``backtest_config`` via
+    ``dataclasses.replace``, so ``backtest_config``'s ``market``/``costs``/
+    ``execution`` are preserved and only ``exits`` changes. The recorded
+    ``GridResult.params`` includes both so a leaderboard row is
+    self-describing without needing the caller's grid definitions.
     """
     frame = candles
     if window is not None:
@@ -91,9 +151,16 @@ def evaluate_params(
             raise ValueError(f"no bars in window [{start}, {end})")
     cfg = StrategyConfig(**params)
     signals = generate_signals(frame, config=cfg)
-    result = run_backtest(frame, signals, backtest_config or BacktestConfig())
+
+    bt_cfg = backtest_config or BacktestConfig()
+    recorded_params = dict(params)
+    if exit_params is not None:
+        bt_cfg = replace(bt_cfg, exits=ExitConfig(**exit_params))
+        recorded_params = {**recorded_params, **exit_params}
+
+    result = run_backtest(frame, signals, bt_cfg)
     return GridResult(
-        params=params,
+        params=recorded_params,
         metrics=result.metrics,
         returns_by_date=daily_returns_by_date(result.equity),
         trade_pnls=result.trades["net_pnl"].to_list(),

@@ -192,6 +192,8 @@ def validate_parameter_search(
     iterations: int = DEFAULT_ITERATIONS,
     seed: int = DEFAULT_SEED,
     n_partitions: int = 8,
+    min_trades: int = 0,
+    n_trials_override: int | None = None,
 ) -> SearchValidation:
     """Run the grid on ``window`` and validate the winner against the search.
 
@@ -203,16 +205,45 @@ def validate_parameter_search(
     Tests that cannot run on the available data are recorded in ``skipped``
     with a reason rather than silently omitted, and any skip makes
     :attr:`SearchValidation.credible` False.
+
+    Phase 09 -- two holes fixed, both of which previously INFLATED
+    confidence:
+
+    ``min_trades`` filters out zero/near-zero-trade trials BEFORE
+    selection and BEFORE ``trial_sharpes`` is built. A zero-trade trial
+    has no return variance, so ``sharpe_ratio`` reports exactly 0.0; a
+    pile of identical 0.0s SHRINKS the measured dispersion across
+    trials (``trial_sharpe_std``), which shrinks the expected-maximum-
+    Sharpe luck benchmark, which makes the deflated Sharpe ratio easier
+    to pass for the WRONG reason. The existing walk-forward step
+    schedule already produces zero-trade steps, so this is not a
+    hypothetical.
+
+    ``n_trials_override``, when given, is what
+    :func:`quant.research.multiple_testing.deflated_sharpe_ratio` is
+    penalized against, INSTEAD of ``len(results)`` (this call's own grid
+    size). A sweep campaign runs many rounds; passing this round's count
+    when the CAMPAIGN tried far more (see
+    ``quant.research.leaderboard.cumulative_trial_count``) understates
+    the luck benchmark and again inflates confidence. Leave unset for a
+    single stand-alone grid search, where this call's own trial count
+    is the correct (and only) number.
     """
     cfg = backtest_config or BacktestConfig()
     combos = grid_combinations(grid)
     if not combos:
         raise ValueError("grid produced no valid combinations")
 
-    results = [
+    all_results = [
         evaluate_params(candles, params, window=window, backtest_config=cfg) for params in combos
     ]
-    n_trials = len(results)
+    results = [r for r in all_results if int(r.metrics.get("total_trades", 0)) >= min_trades]
+    if not results:
+        raise ValueError(
+            f"no trial cleared min_trades={min_trades} (out of {len(all_results)} evaluated); "
+            "cannot select a winner from an empty candidate set"
+        )
+    n_trials = n_trials_override if n_trials_override is not None else len(results)
 
     # Without this guard a typo'd metric name would score every trial 0.0,
     # make ``max`` return the first combination, and report a confident
@@ -223,15 +254,16 @@ def validate_parameter_search(
             f"available: {sorted(results[0].metrics)}"
         )
 
-    best_idx = max(range(n_trials), key=lambda i: float(results[i].metrics[select_by]))
+    best_idx = max(range(len(results)), key=lambda i: float(results[i].metrics[select_by]))
     best = results[best_idx]
     best_returns = [best.returns_by_date[d] for d in sorted(best.returns_by_date, key=str)]
 
     skipped: dict[str, str] = {}
     deflated = bootstrap = permutation = pbo = None
 
-    # Per-period Sharpes, derived from each trial's own returns -- NOT the
-    # annualised `sharpe` metric column. See the module docstring.
+    # Per-period Sharpes, derived from each SURVIVING trial's own returns
+    # (post min_trades filter) -- NOT the annualised `sharpe` metric
+    # column. See the module docstring and the min_trades note above.
     trial_sharpes = [
         sharpe_ratio(
             [r.returns_by_date[d] for d in sorted(r.returns_by_date, key=str)],
@@ -261,8 +293,13 @@ def validate_parameter_search(
         skipped["permutation"] = f"winner made {len(best.trade_pnls)} trades, need >= 2"
 
     matrix, _ = _aligned_matrix(results)
-    if n_trials < MIN_PBO_TRIALS:
-        skipped["pbo"] = f"{n_trials} trial(s), need >= {MIN_PBO_TRIALS}"
+    # PBO's CSCV runs over `matrix`, whose width is len(results) -- the
+    # trials ACTUALLY IN THIS CALL, never the (possibly campaign-wide,
+    # much larger) n_trials_override. Gating this check on the override
+    # would let a tiny/degenerate `results` skip the "too few trials"
+    # check it should trigger.
+    if len(results) < MIN_PBO_TRIALS:
+        skipped["pbo"] = f"{len(results)} trial(s), need >= {MIN_PBO_TRIALS}"
     elif matrix.shape[0] < max(n_partitions, MIN_PBO_OBSERVATIONS):
         skipped["pbo"] = (
             f"{matrix.shape[0]} shared dates across trials, "

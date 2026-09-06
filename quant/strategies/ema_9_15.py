@@ -233,3 +233,44 @@ def signal_events(
         )
         for row in events.to_dicts()
     ]
+
+
+def _registry_generate_signals(frame: pl.DataFrame, params: dict[str, object]) -> pl.DataFrame:
+    """Adapter: ``STRATEGY_REGISTRY``'s ``generate_signals(frame, params)``
+    contract onto this module's ``generate_signals(frame, config=...)``.
+
+    Registering the EMA family under the same registry as the 5 SMC
+    strategies means it flows through the identical sweep/leaderboard
+    machinery (``quant.research.sweep``) rather than a parallel path --
+    one engine, one leaderboard schema, one gate, for every family.
+    ``stop_price``/``target_price`` are always null: the EMA family uses
+    ATR-based brackets (``ExitConfig(stop_mode="atr", ...)``), which
+    never read these columns, unlike the SMC strategies' structural
+    stops (``stop_mode="signal"``).
+    """
+    out = generate_signals(frame, config=StrategyConfig(**params))
+    return out.with_columns(
+        pl.lit(None, dtype=pl.Float64).alias("stop_price"),
+        pl.lit(None, dtype=pl.Float64).alias("target_price"),
+    )
+
+
+from quant.strategies.base import StrategySpec, register_strategy  # noqa: E402
+
+register_strategy(
+    StrategySpec(
+        id="ema",
+        requires_volume=False,
+        default_timeframes=("5m", "15m"),
+        param_space={
+            "fast_ema": (5, 8, 9, 13, 21),
+            "slow_ema": (15, 21, 34, 55, 89),
+            "angle_mode": ("atr_normalized",),
+            "slope_threshold_atr": (0.0, 0.10, 0.20, 0.30, 0.45),
+            "angle_lookback": (1, 3, 5),
+            "signal_mode": ("crossover_and_angle", "crossover_angle_and_trend"),
+        },
+        generate_signals=_registry_generate_signals,
+        description="9/15 EMA crossover with an ATR-normalized slope gate.",
+    )
+)
