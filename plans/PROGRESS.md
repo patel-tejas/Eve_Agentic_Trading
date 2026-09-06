@@ -5,6 +5,62 @@ Newest entries at the top.
 
 ---
 
+## 2026-09-06 -- Round 3 complete: final comprehensive comparison, all 6 strategies x both timeframes
+
+`scripts/run_round3.py` (new): for ALL 36 (strategy, symbol, timeframe)
+cells -- not a narrowed subset like round 2 -- takes that cell's own
+TRAIN-split best config (round 1) and scores it ONCE on the untouched
+2025 VALIDATION year, then runs the formal statistical gate on every
+result. 36 trials, 0 errors, 16s wall (this was a small, targeted sweep,
+not a new parameter search). Final report:
+`data/results/leaderboard/C2026-09-EMA-SMC/FINAL_REPORT.md`.
+
+**Nominal ranking (raw validation-split net_pnl, averaged across the 3
+instruments) -- read with the caveat below before trusting it:**
+
+| Timeframe | Best strategy | avg net_pnl | avg PF | avg trades |
+|---|---|---|---|---|
+| 5m | `ist_judas` | +Rs 11,463 | 1.24 | 35 |
+| 15m | `ema` | +Rs 6,305 | 1.18 | 104 |
+
+**Caveat that matters:** `ist_judas`'s 5m "win" is propped up almost
+entirely by two near-empty cells -- SENSEX 5m had exactly **3** trades
+in the whole validation year, NIFTY 5m had **6**. An average across
+3/6/96-trade cells is not a meaningful comparison; `ema` on 15m is the
+only entry in either ranking built on cells that all clear >=30 trades
+(32-172 across the three instruments) and is the more defensible
+"best," such as it is.
+
+**Formal statistical gate: 0 of 36 cells pass** (deflated Sharpe,
+survival at 95%; bootstrap CI excludes zero) -- penalized against the
+campaign's true cumulative 5,259 distinct trials. Every single
+(strategy, timeframe) combination fails. **No candidate from this
+campaign is statistically credible.**
+
+### Campaign verdict
+
+Three rounds, ~8,750 total trials, one legitimate stopping point: **no
+edge established** under this protocol, for any of the 6 strategy
+families (the re-normalized EMA, or the 5 new SMC/ICT strategies), on
+either timeframe searched (5m, 15m), across any of the 3 instruments.
+This is the honestly-reported, pre-registered outcome -- the TEST split
+(2026, containing June/July/August) has never been opened and remains
+sealed; there is nothing to justify opening it, since the protocol
+requires clearing the validation-split gate first, and nothing did.
+
+What WAS fixed and verified along the way, independent of whether an
+edge was found: the angle-filter scale bug (131x selectivity spread ->
+~1.2x), the paise/rupee tick-size trap, the lot-size error, the missing
+bracket-exit/EOD-square-off machinery, the force-close backtest
+artifact that had been read as a real result, two real multiprocessing
+bugs (registry-not-populated-in-spawned-workers, OpenBLAS thread
+oversubscription) that a smoke test could not have caught, and two
+statistical holes in the validator that were inflating confidence. The
+tuning/search/validation infrastructure itself is sound and reusable
+for a future campaign with different strategies or ranges.
+
+---
+
 ## 2026-09-06 -- Round 2 complete: no candidate survives validation. Honest, gated verdict.
 
 `scripts/run_round2.py` (new): stage 2a (EMA exit tuning -- top-6 distinct
