@@ -238,8 +238,14 @@ def test_rate_limit_is_per_user_and_tier() -> None:
     assert _run(gate, "save", {"name": "c"}, principal=other)["result"]["by"] == other.user_id
 
 
+class _NoSwitch(Controls):
+    def kill_switch_reason(self, principal):
+        return None
+
+
 def test_ui_only_tool_is_hidden_from_chat_and_refused_there() -> None:
     gate, _ = _gate()
+    gate.controls = _NoSwitch()  # no database here; see test_phase15_paper for the real check
     assert "promote" not in gate.offered("chat")
     assert "promote" not in gate.offered("mcp")
     assert "promote" in gate.offered("ui")

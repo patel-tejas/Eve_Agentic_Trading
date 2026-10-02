@@ -98,11 +98,31 @@ class GateError(Exception):
 
 
 class Controls:
-    """Kill-switch lookups. P0 reads ``EVE_KILL_SWITCH``; P5 adds the database."""
+    """Kill-switch lookups for the trading tiers.
+
+    Two switches, either one blocks: ``EVE_KILL_SWITCH`` on the engine host,
+    and the ``algo_trading_controls`` rows in the database (a global row an
+    operator sets, and the user's own row, which they or Eve can engage).
+    The database check fails CLOSED: if the switch cannot be read, the
+    trading call is refused rather than assumed safe.
+    """
 
     def kill_switch_reason(self, principal: Principal) -> str | None:
         if os.environ.get("EVE_KILL_SWITCH", "").lower() in {"1", "true", "yes"}:
             return "the global kill switch is engaged (EVE_KILL_SWITCH)"
+        if not principal.is_user:
+            return None
+        from mcp.quant_server.store import store_for
+
+        try:
+            rows = store_for(principal).get_controls()
+        except Exception as exc:  # noqa: BLE001 - fail closed on any lookup error
+            return f"the kill switch could not be checked ({exc})"
+        for row in rows:
+            if row.get("kill_switch"):
+                scope = "the global" if row.get("user_id") is None else "your"
+                why = f": {row['reason']}" if row.get("reason") else ""
+                return f"{scope} kill switch is engaged{why}"
         return None
 
 

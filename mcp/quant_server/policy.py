@@ -126,6 +126,14 @@ TOOL_POLICY: dict[str, ToolPolicy] = {
     "evaluate_saved_strategy": ToolPolicy("user_write", rate_per_minute=10),
     # Destructive-ish: a human clicks it in Hisaab; never offered to chat.
     "archive_strategy": ToolPolicy("user_write", chat_visible=False),
+    # Paper trading and the kill switch (P5). No tool is in trade_live.
+    "promote_to_paper": ToolPolicy("trade_paper", chat_visible=False),
+    "stop_paper": ToolPolicy("user_write", chat_visible=False),
+    "paper_results": ToolPolicy("user_write", rate_per_minute=10),
+    "trading_controls": ToolPolicy("user_read"),
+    # Eve may stop trading; only a click in Hisaab can resume it.
+    "engage_kill_switch": ToolPolicy("safety"),
+    "release_kill_switch": ToolPolicy("user_write", chat_visible=False),
 }
 
 
