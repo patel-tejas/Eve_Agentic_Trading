@@ -12,6 +12,10 @@ Execution rules
   direction signals while open are ignored.
 - A position still open at series end is closed at the last close and
   flagged with ``closed_at_end=1``.
+- Phase 15: ``EXIT_LONG`` / ``EXIT_SHORT`` / ``EXIT`` only ever flatten the
+  matching position and never open one. They let a long-only rule-spec
+  strategy say "go flat" without a SELL that would open a short from FLAT.
+  No pre-Phase-15 strategy emits them, so legacy runs are unchanged.
 
 Phase 09: optional bracket exits (``BacktestConfig.exits``) and a
 contract-aware ``MarketContext`` (``BacktestConfig.market``). Both are
@@ -165,6 +169,8 @@ def _bracket_levels(
         target_level = entry_price + sign * exits.target_atr_mult * atr_at_entry
     elif exits.target_mode == "points" and exits.target_points > 0:
         target_level = entry_price + sign * exits.target_points
+    elif exits.target_mode == "pct" and exits.target_pct > 0:
+        target_level = entry_price * (1 + sign * exits.target_pct)
 
     return stop_level, target_level, risk
 
@@ -661,10 +667,10 @@ def run_backtest(
         #    Splitting this into two independent statements would let a
         #    SELL that closes a LONG immediately open a SHORT in the same
         #    bar, which is not the legacy semantics.
-        if position == "LONG" and pending == "SELL":
+        if position == "LONG" and pending in ("SELL", "EXIT_LONG", "EXIT"):
             exit_px = adjusted_price(opens[i], "sell", slippage, tick)
             close_trade("LONG", exit_px, i, closed_at_end=False, exit_reason="signal")
-        elif position == "SHORT" and pending == "BUY":
+        elif position == "SHORT" and pending in ("BUY", "EXIT_SHORT", "EXIT"):
             exit_px = adjusted_price(opens[i], "buy", slippage, tick)
             close_trade("SHORT", exit_px, i, closed_at_end=False, exit_reason="signal")
         elif position == "FLAT":

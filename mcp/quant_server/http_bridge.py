@@ -62,7 +62,7 @@ from mcp.quant_server.gate import (
 )
 from mcp.quant_server.grounding import check_grounding
 from mcp.quant_server.policy import TOOL_POLICY
-from mcp.quant_server.server import ALL_TOOL_FUNCTIONS
+from mcp.quant_server.registry import ALL_TOOL_FUNCTIONS
 
 DEFAULT_PORT = 8010
 

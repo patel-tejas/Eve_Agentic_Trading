@@ -111,6 +111,12 @@ TOOL_POLICY: dict[str, ToolPolicy] = {
     # Writes validation_report.json next to the raw data, so it is a write
     # tool even though its name reads like a check.
     "validate_dataset": ToolPolicy("data_write"),
+    # --- Phase 15 strategy builder: stateless spec tools (P1) -------------
+    "describe_strategy_vocabulary": ToolPolicy("read"),
+    "validate_strategy_spec": ToolPolicy("read"),
+    "preview_strategy_signals": ToolPolicy("compute"),
+    "backtest_strategy_spec": ToolPolicy("compute"),
+    "strategy_significance": ToolPolicy("compute_heavy"),
 }
 
 

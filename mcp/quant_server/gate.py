@@ -140,28 +140,28 @@ def _is_model(tp: Any) -> bool:
     return inspect.isclass(tp) and issubclass(tp, BaseModel)
 
 
-def _inline_refs(schema: Any, defs: Mapping[str, Any]) -> Any:
-    """Resolve ``$ref`` into ``$defs`` so the schema is self-contained.
-
-    LLM tool schemas are consumed by providers with uneven ``$ref`` support;
-    an inlined schema is the portable form.
-    """
+def _strip_titles(schema: Any) -> Any:
     if isinstance(schema, dict):
-        if "$ref" in schema and isinstance(schema["$ref"], str):
-            target = defs.get(schema["$ref"].rsplit("/", 1)[-1], {})
-            merged = {**_inline_refs(target, defs), **{
-                k: v for k, v in schema.items() if k != "$ref"
-            }}
-            return merged
-        return {k: _inline_refs(v, defs) for k, v in schema.items() if k != "$defs"}
+        return {k: _strip_titles(v) for k, v in schema.items() if k != "title"}
     if isinstance(schema, list):
-        return [_inline_refs(v, defs) for v in schema]
+        return [_strip_titles(v) for v in schema]
     return schema
 
 
 def model_schema(model: type[BaseModel]) -> dict[str, Any]:
-    raw = model.model_json_schema()
-    return _inline_refs(raw, raw.get("$defs", {}))
+    """Compact JSON Schema for a pydantic model, ``$defs`` kept as references.
+
+    Inlining the references would repeat the operand union for every
+    condition slot and grow the spec schema from ~7 KB to ~50 KB -- tokens the
+    model pays for on every turn.
+    """
+    return _strip_titles(model.model_json_schema())
+
+
+# A nested-model parameter gets its full schema only on tools that opt in
+# with ``fn.__eve_full_schema__ = True``. Every other tool taking the same
+# model advertises a plain object, so the chat pays for the spec schema once.
+FULL_SCHEMA_ATTR = "__eve_full_schema__"
 
 
 def tool_schema(fn: Callable[..., Any]) -> dict[str, Any]:
@@ -178,7 +178,14 @@ def tool_schema(fn: Callable[..., Any]) -> dict[str, Any]:
     for param in public_params(fn):
         tp, _ = _unwrap_optional(hints.get(param.name, str))
         if _is_model(tp):
-            prop = model_schema(tp)
+            if getattr(fn, FULL_SCHEMA_ATTR, False):
+                prop = model_schema(tp)
+            else:
+                prop = {
+                    "type": "object",
+                    "description": f"A {tp.__name__} object. Build it with the schema of "
+                    "validate_strategy_spec and validate it there first.",
+                }
         else:
             prop = {"type": _JSON_TYPES.get(tp, "string")}
         if param.default is inspect.Parameter.empty:

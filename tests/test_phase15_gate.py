@@ -19,7 +19,8 @@ from mcp.quant_server.audit import MemoryAuditSink
 from mcp.quant_server.auth import ANONYMOUS, Principal, current_principal
 from mcp.quant_server.gate import Controls, Gate, GateError
 from mcp.quant_server.policy import TOOL_POLICY, ToolPolicy
-from mcp.quant_server.server import ALL_TOOL_FUNCTIONS, build_server
+from mcp.quant_server.registry import ALL_TOOL_FUNCTIONS
+from mcp.quant_server.server import build_server
 
 SECRET = "test-internal-secret"
 JWT_SECRET = "test-jwt-secret-which-is-long-enough-for-hs256"

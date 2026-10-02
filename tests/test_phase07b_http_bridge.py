@@ -54,7 +54,10 @@ def test_manifest_covers_the_mcp_tool_set_minus_write_tools() -> None:
     Both read ``_TOOL_FUNCTIONS``, so this pins that they cannot drift apart,
     while the write tools stay withheld unless explicitly enabled.
     """
-    expected = set(TOOL_NAMES)
+    from mcp.quant_server.registry import ALL_TOOL_NAMES
+
+    assert set(TOOL_NAMES) <= set(ALL_TOOL_NAMES)
+    expected = set(ALL_TOOL_NAMES)
     if not WRITE_TOOLS_ENABLED:
         expected -= _WRITE_TOOLS
     assert {entry["name"] for entry in tool_manifest()} == expected
