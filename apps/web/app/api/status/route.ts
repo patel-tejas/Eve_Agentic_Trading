@@ -6,7 +6,7 @@
  * so both are checked here, before the user types anything.
  */
 
-import { bridgeStatus, BRIDGE_URL } from "@/lib/quant";
+import { bridgeStatus, BRIDGE_URL, fetchManifest } from "@/lib/quant";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -107,7 +107,17 @@ export async function GET() {
   const [bridge, model] = await Promise.all([bridgeStatus(), checkModel()]);
 
   let months: Record<string, Record<string, number>> = {};
+  let tools: { name: string; description: string }[] = [];
   if (bridge.ok) {
+    try {
+      tools = (await fetchManifest()).map(({ name, description }) => ({
+        name,
+        description,
+      }));
+    } catch {
+      // The agent tab lists tools when it can; the count above still shows.
+    }
+
     try {
       const res = await fetch(`${BRIDGE_URL}/tools/list_research_months`, {
         method: "POST",
@@ -128,5 +138,10 @@ export async function GET() {
   }
 
   // Note: the key itself is never returned — only whether it works.
-  return Response.json({ bridge: { url: BRIDGE_URL, ...bridge }, model, months });
+  return Response.json({
+    bridge: { url: BRIDGE_URL, ...bridge },
+    model,
+    months,
+    tools,
+  });
 }

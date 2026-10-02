@@ -1,26 +1,392 @@
 @import "tailwindcss";
 
+/* ─────────────────────────────────────────────────────────
+ * FOUNDATION TOKENS
+ *
+ * Every component reads colour, elevation, radius and spacing
+ * from here, so the whole app shifts together when one value
+ * changes. Light is the default; dark follows the OS unless
+ * the user picks a theme (data-theme on <html>).
+ *
+ *   canvas   app background          surface  cards, menus
+ *   field    inputs, user bubbles    inset    nested panels
+ *   ink      primary text            ink-2/3  secondary, muted
+ *   line     hairlines               hover    row highlights
+ * ───────────────────────────────────────────────────────── */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --canvas: #f7f7f5;
+  --surface: #ffffff;
+  --field: #f1f1ef;
+  --inset: #f6f6f4;
+  --ink: #1a1a19;
+  --ink-2: #5f5f5b;
+  --ink-3: #9d9d97;
+  --line: rgba(20, 20, 18, 0.08);
+  --line-strong: rgba(20, 20, 18, 0.15);
+  --hover: rgba(20, 20, 18, 0.04);
+  --hover-2: rgba(20, 20, 18, 0.065);
+
+  --accent: #4f5bd5;
+  --accent-ink: #3b46b8;
+  --accent-tint: rgba(79, 91, 213, 0.1);
+  --green: #16834a;
+  --green-tint: rgba(22, 131, 74, 0.1);
+  --amber: #b4690e;
+  --amber-tint: rgba(180, 105, 14, 0.1);
+  --red: #c4320a;
+  --red-tint: rgba(196, 50, 10, 0.08);
+
+  --tooltip-bg: #1a1a19;
+  --tooltip-muted: #9d9d97;
+
+  /* page gutter tightens on phones; everything else keeps its size */
+  --page-gutter: 1.5rem;
+
+  --elev-hairline: 0 0 0 1px var(--line);
+  --elev-card: 0 0 0 1px var(--line), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --elev-raised: 0 0 0 1px var(--line), 0 6px 16px -4px rgba(0, 0, 0, 0.1);
+  --elev-overlay: 0 0 0 1px var(--line), 0 16px 40px -8px rgba(0, 0, 0, 0.18);
+
+  color-scheme: light;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --canvas: #111110;
+    --surface: #1a1a19;
+    --field: #232322;
+    --inset: #161615;
+    --ink: #ededeb;
+    --ink-2: #a8a8a3;
+    --ink-3: #6f6f6a;
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.16);
+    --hover: rgba(255, 255, 255, 0.045);
+    --hover-2: rgba(255, 255, 255, 0.075);
+    --accent: #8b93ff;
+    --accent-ink: #a4aaff;
+    --accent-tint: rgba(139, 147, 255, 0.14);
+    --green: #4ac283;
+    --green-tint: rgba(74, 194, 131, 0.13);
+    --amber: #e5a443;
+    --amber-tint: rgba(229, 164, 67, 0.13);
+    --red: #f2785a;
+    --red-tint: rgba(242, 120, 90, 0.12);
+    --tooltip-bg: #000000;
+    --elev-card: 0 0 0 1px var(--line), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --elev-raised: 0 0 0 1px var(--line-strong), 0 8px 20px -4px rgba(0, 0, 0, 0.5);
+    --elev-overlay: 0 0 0 1px var(--line-strong), 0 18px 44px -8px rgba(0, 0, 0, 0.6);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --canvas: #111110;
+  --surface: #1a1a19;
+  --field: #232322;
+  --inset: #161615;
+  --ink: #ededeb;
+  --ink-2: #a8a8a3;
+  --ink-3: #6f6f6a;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --hover: rgba(255, 255, 255, 0.045);
+  --hover-2: rgba(255, 255, 255, 0.075);
+  --accent: #8b93ff;
+  --accent-ink: #a4aaff;
+  --accent-tint: rgba(139, 147, 255, 0.14);
+  --green: #4ac283;
+  --green-tint: rgba(74, 194, 131, 0.13);
+  --amber: #e5a443;
+  --amber-tint: rgba(229, 164, 67, 0.13);
+  --red: #f2785a;
+  --red-tint: rgba(242, 120, 90, 0.12);
+  --tooltip-bg: #000000;
+  --elev-card: 0 0 0 1px var(--line), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --elev-raised: 0 0 0 1px var(--line-strong), 0 8px 20px -4px rgba(0, 0, 0, 0.5);
+  --elev-overlay: 0 0 0 1px var(--line-strong), 0 18px 44px -8px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+/* Tokens exposed as Tailwind utilities: bg-surface, text-ink-2,
+ * shadow-card, rounded-control, p-card, gap-stack … */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-field: var(--field);
+  --color-inset: var(--inset);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-hover: var(--hover);
+  --color-hover-2: var(--hover-2);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-tint: var(--accent-tint);
+  --color-green: var(--green);
+  --color-green-tint: var(--green-tint);
+  --color-amber: var(--amber);
+  --color-amber-tint: var(--amber-tint);
+  --color-red: var(--red);
+  --color-red-tint: var(--red-tint);
+
+  --shadow-hairline: var(--elev-hairline);
+  --shadow-card: var(--elev-card);
+  --shadow-raised: var(--elev-raised);
+  --shadow-overlay: var(--elev-overlay);
+
+  /* one radius per element size, smallest to largest */
+  --radius-chip: 6px;
+  --radius-control: 10px;
+  --radius-card: 14px;
+  --radius-panel: 18px;
+
+  /* spacing rhythm: page gutter > card padding > stack gap > tight gap */
+  --spacing-page: var(--page-gutter);
+  --spacing-section: 2rem;
+  --spacing-card: 1rem;
+  --spacing-stack: 0.75rem;
+  --spacing-tight: 0.5rem;
+
+  /* the reading column every view centres on */
+  --container-measure: 46rem;
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  background: var(--canvas);
+  color: var(--ink);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent-tint);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* text fields show focus on their container (focus-within) instead */
+input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --page-gutter: 1rem;
+  }
+}
+
+/* ── shared motion ─────────────────────────────────────── */
+
+@keyframes pixel-on {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  35% {
+    opacity: 1;
+  }
+}
+
+@keyframes shimmer-text {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── sidebar collapse: copy fades, icons keep their column ─ */
+
+.sidebar-copy {
+  transition:
+    opacity var(--sidebar-copy-duration, 180ms) var(--sidebar-easing, ease),
+    transform var(--sidebar-copy-duration, 180ms) var(--sidebar-easing, ease);
+}
+
+[data-sidebar-collapsed="true"] .sidebar-copy {
+  opacity: 0;
+  transform: translateX(calc(var(--sidebar-copy-offset, 8px) * -1));
+  pointer-events: none;
+}
+
+[data-sidebar-collapsed="true"] .sidebar-row {
+  width: 36px;
+}
+
+.sidebar-collapse-control {
+  opacity: 1;
+}
+[data-sidebar-collapsed="true"] .sidebar-collapse-control,
+[data-sidebar-collapsed="true"] .sidebar-workspace-control {
+  opacity: 0;
+  pointer-events: none;
+}
+.sidebar-expand-control {
+  opacity: 0;
+  pointer-events: none;
+}
+[data-sidebar-collapsed="true"] .sidebar-expand-control {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ── assistant prose (markdown answers) ────────────────── */
+
+.prose-eve {
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--ink);
+}
+.prose-eve > * + * {
+  margin-top: 0.75rem;
+}
+.prose-eve h1,
+.prose-eve h2,
+.prose-eve h3 {
+  font-weight: 600;
+  line-height: 1.35;
+  margin-top: 1.25rem;
+}
+.prose-eve h1 {
+  font-size: 1.15rem;
+}
+.prose-eve h2 {
+  font-size: 1.05rem;
+}
+.prose-eve h3 {
+  font-size: 0.95rem;
+}
+.prose-eve ul,
+.prose-eve ol {
+  padding-left: 1.25rem;
+}
+.prose-eve ul {
+  list-style: disc;
+}
+.prose-eve ol {
+  list-style: decimal;
+}
+.prose-eve li + li {
+  margin-top: 0.25rem;
+}
+.prose-eve li::marker {
+  color: var(--ink-3);
+}
+.prose-eve strong {
+  font-weight: 600;
+}
+.prose-eve a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-eve code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 12.5px;
+  background: var(--field);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.prose-eve pre {
+  background: var(--inset);
+  box-shadow: var(--elev-hairline);
+  border-radius: var(--radius-control);
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+}
+.prose-eve pre code {
+  background: transparent;
+  padding: 0;
+}
+.prose-eve .table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius-control);
+  box-shadow: var(--elev-hairline);
+}
+.prose-eve table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.prose-eve th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--ink-2);
+  background: var(--inset);
+}
+.prose-eve th,
+.prose-eve td {
+  padding: 0.45rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.prose-eve tr:last-child td {
+  border-bottom: 0;
+}
+.prose-eve blockquote {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 0.75rem;
+  color: var(--ink-2);
+}
+.prose-eve hr {
+  border-color: var(--line);
 }
