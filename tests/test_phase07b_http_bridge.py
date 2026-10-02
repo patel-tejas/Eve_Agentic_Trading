@@ -158,9 +158,12 @@ def test_engine_errors_come_back_as_actionable_400s(client: TestClient) -> None:
 
 
 def test_missing_required_argument_is_a_400(client: TestClient) -> None:
+    """Phase 15: the gate validates before the engine runs, naming the field."""
     res = client.post("/tools/run_backtest_signals", json={})
     assert res.status_code == 400
-    assert "TypeError" in res.json()["error"]
+    body = res.json()
+    assert "/month" in body["error"] and "required" in body["error"].lower()
+    assert body["issues"][0]["path"] == "/month"
 
 
 # --------------------------------------------------------------------------
