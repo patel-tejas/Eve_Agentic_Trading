@@ -278,3 +278,24 @@ def test_audit_never_stores_secrets() -> None:
     gate, sink = _gate()
     _run(gate, "echo", {"n": 1, "access_token": "abc"})
     assert sink.records[-1].args_redacted["access_token"] == "[redacted]"
+
+
+def test_every_manifest_ref_resolves_inside_its_own_tool_schema() -> None:
+    """A ``$ref`` is resolved against the tool schema's root, so ``$defs`` must
+    sit there; nested under a property they would be unreachable."""
+
+    def refs(node):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                yield node["$ref"]
+            for v in node.values():
+                yield from refs(v)
+        elif isinstance(node, list):
+            for v in node:
+                yield from refs(v)
+
+    for entry in http_bridge.tool_manifest("ui"):
+        schema = entry["parameters"]
+        for ref in refs(schema):
+            assert ref.startswith("#/$defs/"), (entry["name"], ref)
+            assert ref.split("/")[-1] in schema.get("$defs", {}), (entry["name"], ref)

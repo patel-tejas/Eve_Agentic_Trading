@@ -175,11 +175,15 @@ def tool_schema(fn: Callable[..., Any]) -> dict[str, Any]:
     hints = _type_hints(fn)
     properties: dict[str, Any] = {}
     required: list[str] = []
+    defs: dict[str, Any] = {}
     for param in public_params(fn):
         tp, _ = _unwrap_optional(hints.get(param.name, str))
         if _is_model(tp):
             if getattr(fn, FULL_SCHEMA_ATTR, False):
                 prop = model_schema(tp)
+                # "#/$defs/X" resolves against the document root, so the
+                # definitions must live on the tool schema, not on the property.
+                defs.update(prop.pop("$defs", {}))
             else:
                 prop = {
                     "type": "object",
@@ -193,12 +197,15 @@ def tool_schema(fn: Callable[..., Any]) -> dict[str, Any]:
         else:
             prop["default"] = param.default
         properties[param.name] = prop
-    return {
+    schema: dict[str, Any] = {
         "type": "object",
         "properties": properties,
         "required": required,
         "additionalProperties": False,
     }
+    if defs:
+        schema["$defs"] = defs
+    return schema
 
 
 def _coerce_json_strings(value: Any) -> Any:
