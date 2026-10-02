@@ -19,6 +19,7 @@ from mcp.quant_server.server import DEFAULT_PROCESSED_ROOT, _json_safe
 from mcp.quant_server.store import StoreError, new_id, store_for
 from mcp.quant_server.strategy_tools import backtest_payload, run_spec_backtest
 from quant.strategies.spec import (
+    NIFTY_LOT_SIZE,
     SCHEMA_VERSION,
     StrategySpecV1,
     analyse,
@@ -27,6 +28,7 @@ from quant.strategies.spec import (
     spec_hash,
 )
 from quant.strategies.spec.diff import spec_diff
+from quant.strategies.spec.evaluation import buy_and_hold, make_verdict
 
 ENGINE_VERSION = "phase15"
 _STATUSES = ("draft", "validated", "backtested", "paper", "archived")
@@ -373,6 +375,121 @@ def backtest_saved_strategy(
     )
 
 
+def evaluate_saved_strategy(
+    strategy_id: str,
+    holdout_month: str,
+    version: int = 0,
+    processed_root: str = str(DEFAULT_PROCESSED_ROOT),
+) -> dict[str, object]:
+    """Honest verdict on a saved strategy version: re-runs its latest
+    in-sample backtest, runs it once on ``holdout_month`` (a research month
+    this strategy has never been backtested on), and corrects for how many
+    versions and backtests were tried (deflated Sharpe), with a buy-and-hold
+    benchmark and a minimum-trades check. Recorded as a holdout backtest and
+    counted as a trial. Quote its ``verdict`` as it is; never soften it."""
+    store = _store()
+    strategy = _strategy_or_404(store, strategy_id)
+    row = _version_row(store, strategy, version)
+    versions = store.list_versions(strategy_id)
+    history = store.list_backtests([v["id"] for v in versions])
+    tuned_on = {
+        (b.get("params") or {}).get("month")
+        for b in history
+        if b.get("kind") == "in_sample"
+    }
+    own = [
+        b for b in history
+        if b["strategy_version_id"] == row["id"] and b.get("kind") == "in_sample"
+    ]
+    if not own:
+        raise StoreError(
+            f"version {row['version']} has no in-sample backtest yet; backtest it on a "
+            "research month first, then evaluate on a different one"
+        )
+    if holdout_month in tuned_on:
+        raise StoreError(
+            f"{holdout_month} has already been backtested for this strategy, so it is not "
+            f"unseen. Pick a research month outside: {', '.join(sorted(m for m in tuned_on if m))}"
+        )
+    if any(
+        b.get("kind") == "holdout"
+        and (b.get("params") or {}).get("month") == holdout_month
+        and b["strategy_version_id"] == row["id"]
+        for b in history
+    ):
+        raise StoreError(
+            f"version {row['version']} was already evaluated on {holdout_month}; its verdict "
+            "is recorded (get_my_strategy). Running it again would only add a trial."
+        )
+    holdout_reused = any(
+        b.get("kind") == "holdout" and (b.get("params") or {}).get("month") == holdout_month
+        and b["strategy_version_id"] != row["id"]
+        for b in history
+    )
+
+    latest_in = own[0]  # list_backtests is newest first
+    in_month = (latest_in.get("params") or {}).get("month")
+    valid, _, in_result = run_spec_backtest(row["spec"], in_month, processed_root)
+    _, out_candles, out_result = run_spec_backtest(row["spec"], holdout_month, processed_root)
+    in_payload = backtest_payload(valid, in_month, in_result, include_trades=False)
+    out_payload = backtest_payload(valid, holdout_month, out_result, include_trades=False)
+
+    trials = int(strategy.get("trial_count") or 0) + 1
+    recorded = [
+        (b.get("metrics") or {}).get("sharpe")
+        for b in history
+        if b.get("kind") == "in_sample" and (b.get("metrics") or {}).get("sharpe") is not None
+    ]
+    verdict = make_verdict(
+        trials=trials,
+        in_sample_metrics=in_payload["metrics"],
+        holdout_metrics=out_payload["metrics"],
+        in_sample_returns=in_result.daily_returns,
+        recorded_sharpes=recorded,
+        benchmark=buy_and_hold(out_candles, NIFTY_LOT_SIZE, valid.sizing.lots),
+        holdout_reused=holdout_reused,
+    ).to_dict()
+    verdict["in_sample_month"] = in_month
+    verdict["holdout_month"] = holdout_month
+    verdict["in_sample_metrics"] = _metrics_row(in_payload["metrics"])
+    verdict["exit_reasons"] = out_payload["exit_reasons"]
+
+    saved = store.insert_backtest(
+        {
+            "id": new_id(),
+            "strategy_version_id": row["id"],
+            "user_id": store.user_id,
+            "kind": "holdout",
+            "params": {
+                "month": holdout_month,
+                "in_sample_month": in_month,
+                "timeframe": valid.timeframe,
+                "slippage": valid.execution.slippage,
+                "lot_size": NIFTY_LOT_SIZE,
+                "lots": valid.sizing.lots,
+            },
+            "metrics": out_payload["metrics"],
+            "verdict": _json_safe(verdict),
+            "engine_version": ENGINE_VERSION,
+            "data_version": holdout_month,
+            "run_card_hash": row["spec_hash"],
+            "status": "ok",
+        }
+    )
+    updated = store.update_strategy(strategy_id, {"trial_count": trials})
+    return _json_safe(
+        {
+            "strategy_id": strategy_id,
+            "version": row["version"],
+            "backtest_id": saved["id"],
+            "trial_count": updated["trial_count"],
+            "in_sample": {"month": in_month, "metrics": in_payload["metrics"]},
+            "holdout": {"month": holdout_month, "metrics": out_payload["metrics"]},
+            "verdict": verdict,
+        }
+    )
+
+
 def archive_strategy(strategy_id: str) -> dict[str, object]:
     """Archive one of the user's strategies (Hisaab UI only, never chat)."""
     store = _store()
@@ -387,5 +504,6 @@ STORE_TOOL_FUNCTIONS = (
     save_strategy,
     revise_strategy,
     backtest_saved_strategy,
+    evaluate_saved_strategy,
     archive_strategy,
 )

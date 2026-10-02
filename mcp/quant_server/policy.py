@@ -123,6 +123,7 @@ TOOL_POLICY: dict[str, ToolPolicy] = {
     "save_strategy": ToolPolicy("user_write"),
     "revise_strategy": ToolPolicy("user_write"),
     "backtest_saved_strategy": ToolPolicy("user_write", rate_per_minute=10),
+    "evaluate_saved_strategy": ToolPolicy("user_write", rate_per_minute=10),
     # Destructive-ish: a human clicks it in Hisaab; never offered to chat.
     "archive_strategy": ToolPolicy("user_write", chat_visible=False),
 }
