@@ -43,3 +43,4 @@ data/vault/
 
 # Gate audit trail (Phase 15)
 data/audit/
+data/local/
