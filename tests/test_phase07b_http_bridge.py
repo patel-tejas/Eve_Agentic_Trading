@@ -54,10 +54,12 @@ def test_manifest_covers_the_mcp_tool_set_minus_write_tools() -> None:
     Both read ``_TOOL_FUNCTIONS``, so this pins that they cannot drift apart,
     while the write tools stay withheld unless explicitly enabled.
     """
+    from mcp.quant_server.policy import TOOL_POLICY
     from mcp.quant_server.registry import ALL_TOOL_NAMES
 
     assert set(TOOL_NAMES) <= set(ALL_TOOL_NAMES)
-    expected = set(ALL_TOOL_NAMES)
+    # Phase 15: UI-only tools (a human clicks them in Hisaab) are never offered.
+    expected = {n for n in ALL_TOOL_NAMES if TOOL_POLICY[n].chat_visible}
     if not WRITE_TOOLS_ENABLED:
         expected -= _WRITE_TOOLS
     assert {entry["name"] for entry in tool_manifest()} == expected

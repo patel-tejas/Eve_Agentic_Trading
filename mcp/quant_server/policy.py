@@ -117,6 +117,14 @@ TOOL_POLICY: dict[str, ToolPolicy] = {
     "preview_strategy_signals": ToolPolicy("compute"),
     "backtest_strategy_spec": ToolPolicy("compute"),
     "strategy_significance": ToolPolicy("compute_heavy"),
+    # --- Phase 15 strategy builder: the user's saved strategies (P2) ------
+    "list_my_strategies": ToolPolicy("user_read"),
+    "get_my_strategy": ToolPolicy("user_read"),
+    "save_strategy": ToolPolicy("user_write"),
+    "revise_strategy": ToolPolicy("user_write"),
+    "backtest_saved_strategy": ToolPolicy("user_write", rate_per_minute=10),
+    # Destructive-ish: a human clicks it in Hisaab; never offered to chat.
+    "archive_strategy": ToolPolicy("user_write", chat_visible=False),
 }
 
 
