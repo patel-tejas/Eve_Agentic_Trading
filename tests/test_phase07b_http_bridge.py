@@ -54,7 +54,12 @@ def test_manifest_covers_the_mcp_tool_set_minus_write_tools() -> None:
     Both read ``_TOOL_FUNCTIONS``, so this pins that they cannot drift apart,
     while the write tools stay withheld unless explicitly enabled.
     """
-    expected = set(TOOL_NAMES)
+    from mcp.quant_server.policy import TOOL_POLICY
+    from mcp.quant_server.registry import ALL_TOOL_NAMES
+
+    assert set(TOOL_NAMES) <= set(ALL_TOOL_NAMES)
+    # Phase 15: UI-only tools (a human clicks them in Hisaab) are never offered.
+    expected = {n for n in ALL_TOOL_NAMES if TOOL_POLICY[n].chat_visible}
     if not WRITE_TOOLS_ENABLED:
         expected -= _WRITE_TOOLS
     assert {entry["name"] for entry in tool_manifest()} == expected
@@ -158,9 +163,12 @@ def test_engine_errors_come_back_as_actionable_400s(client: TestClient) -> None:
 
 
 def test_missing_required_argument_is_a_400(client: TestClient) -> None:
+    """Phase 15: the gate validates before the engine runs, naming the field."""
     res = client.post("/tools/run_backtest_signals", json={})
     assert res.status_code == 400
-    assert "TypeError" in res.json()["error"]
+    body = res.json()
+    assert "/month" in body["error"] and "required" in body["error"].lower()
+    assert body["issues"][0]["path"] == "/month"
 
 
 # --------------------------------------------------------------------------

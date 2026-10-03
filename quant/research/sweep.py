@@ -53,6 +53,7 @@ import quant.strategies.ema_ha_pattern  # noqa: E402,F401
 import quant.strategies.ist_judas  # noqa: E402,F401
 import quant.strategies.orb_vwap  # noqa: E402,F401
 import quant.strategies.pdh_pdl_turtle_soup  # noqa: E402,F401
+import quant.strategies.rule_spec  # noqa: E402,F401
 import quant.strategies.smc_ob_choch  # noqa: E402,F401
 import quant.strategies.smc_sweep_fvg  # noqa: E402,F401
 from quant.backtest.costs import CostConfig, SlippageConfig

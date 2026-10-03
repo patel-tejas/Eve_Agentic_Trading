@@ -40,3 +40,7 @@ apps/web/.eve/
 
 # Local experiment vault (SQLite, machine-local)
 data/vault/
+
+# Gate audit trail (Phase 15)
+data/audit/
+data/local/

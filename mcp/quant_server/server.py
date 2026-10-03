@@ -17,6 +17,7 @@ from pathlib import Path
 import polars as pl
 from fastmcp import FastMCP
 
+import quant.strategies.rule_spec  # noqa: F401 - registers rule_spec
 from quant.backtest.costs import CostConfig, SlippageConfig
 from quant.backtest.engine import BacktestConfig, run_backtest
 from quant.backtest.execution import ExecutionConfig
@@ -670,8 +671,18 @@ _TOOL_FUNCTIONS = (
 TOOL_NAMES = tuple(fn.__name__ for fn in _TOOL_FUNCTIONS)
 
 
-def build_server() -> FastMCP:
-    """Assemble the FastMCP app with every quant tool registered."""
+def build_server(gate=None) -> FastMCP:
+    """Assemble the FastMCP app with every quant tool registered.
+
+    Every call goes through the common gate (``gate.py``) via
+    ``TradingGateMiddleware``: the same policy, validation, rate limits and
+    audit trail as the HTTP bridge.
+    """
+    from mcp.quant_server.gate import Gate
+    from mcp.quant_server.mcp_middleware import TradingGateMiddleware
+    from mcp.quant_server.registry import ALL_TOOL_FUNCTIONS
+
+    gate = gate or Gate(tools={fn.__name__: fn for fn in ALL_TOOL_FUNCTIONS})
     mcp = FastMCP(
         "quant-engine",
         instructions=(
@@ -680,8 +691,9 @@ def build_server() -> FastMCP:
             "The agent orchestrates; the engine calculates."
         ),
     )
-    for fn in _TOOL_FUNCTIONS:
+    for fn in ALL_TOOL_FUNCTIONS:
         mcp.tool(name=fn.__name__, description=fn.__doc__.strip().splitlines()[0])(fn)
+    mcp.add_middleware(TradingGateMiddleware(gate))
     return mcp
 
 

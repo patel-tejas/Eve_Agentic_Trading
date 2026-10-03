@@ -53,7 +53,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 StopMode = Literal["none", "atr", "points", "pct", "signal"]
-TargetMode = Literal["none", "r_multiple", "atr", "points", "signal"]
+TargetMode = Literal["none", "r_multiple", "atr", "points", "pct", "signal"]
 TrailMode = Literal["none", "atr", "breakeven_then_atr", "prev_candle_extreme"]
 AfterLeg1Stop = Literal["keep", "breakeven"]
 
@@ -93,6 +93,7 @@ class ExitConfig:
     target_r_multiple: float = 2.0
     target_atr_mult: float = 0.0
     target_points: float = 0.0
+    target_pct: float = 0.0  # fraction, e.g. 0.02 = 2% (Phase 15)
 
     trail_mode: TrailMode = "none"
     trail_atr_mult: float = 2.0
