@@ -1,0 +1,53 @@
+{
+  "version": 2,
+  "skills": {
+    "design-taste-frontend": {
+      "source": "Leonxlnx/taste-skill",
+      "sourceType": "github",
+      "skillPath": "skills/taste-skill/SKILL.md",
+      "computedHash": "b10eab0a9684cd09cf34c31ef04a3bf530a5f4404422f9c520d42372d670c7fc"
+    },
+    "setup-matt-pocock-skills": {
+      "source": "mattpocock/skills",
+      "commit": "abeeaf95660ba9e8b7c753eb38f441ca707a8823",
+      "sourceType": "github",
+      "skillPath": "skills/engineering/setup-matt-pocock-skills/SKILL.md",
+      "computedHash": "9659e7025d4cf1c0a0b40ddff32ed4b8debb87a4b20d7a52ff89c506a638df69"
+    },
+    "transitions-dev": {
+      "source": "Jakubantalik/transitions.dev",
+      "sourceType": "github",
+      "skillPath": "skills/transitions-dev/SKILL.md",
+      "computedHash": "a6752e3d9482300f44bc9c58b4dcd042f2744a3ea2c0783d58a1cd0fc918be41"
+    },
+    "transitions-polish": {
+      "source": "Jakubantalik/transitions.dev",
+      "sourceType": "github",
+      "skillPath": "skills/transitions-polish/SKILL.md",
+      "computedHash": "e456d8cc8ef3b18ae9d1f5be41ea92b0b14abeb8cf8cf7eff2da09966b15a785"
+    },
+    "vercel-react-best-practices": {
+      "source": "vercel-labs/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/react-best-practices/SKILL.md",
+      "computedHash": "3219a1944e404ffc14d1d9d6aef6dd2e3855b81387ee0a044ccbfe14d34c2357"
+    },
+    "react-doctor": {
+      "source": "aidenybai/react-doctor",
+      "sourceType": "github",
+      "skillPath": "skills/react-doctor/SKILL.md"
+    },
+    "improve-react": {
+      "source": "aidenybai/react-doctor",
+      "sourceType": "github",
+      "skillPath": "skills/improve-react/SKILL.md",
+      "computedHash": "ee6095448a511e2507528caae7ba91c5dc462464b603196c5b1931d4924a371a"
+    },
+    "review-animations": {
+      "source": "emilkowalski/skills",
+      "sourceType": "github",
+      "skillPath": "skills/review-animations/SKILL.md",
+      "computedHash": "8c2befeb28bb484bf2de7b2fc228774857e266d32a65d76895e78651a536d8cf"
+    }
+  }
+}
